@@ -191,12 +191,15 @@ export default {
 
     // Fotos de producto (R2 / proxy de Drive)
     if (path.startsWith("/img/") && request.method === "GET") return serveImage(path, env, ctx);
-    // Archivos estáticos: sirve los mismos archivos de siempre, para cualquier negocio
+    // Archivos estáticos: sirve los mismos archivos de siempre, para cualquier negocio.
+    // Dirección que NO empieza con "rush." (ej. app.artmmx.workers.dev, o tu dominio propio más adelante)
+    // → la raíz "/" muestra el registro público, no el login de un negocio en particular.
+    const isMarketingHost = !url.hostname.split(".")[0].startsWith("rush");
     if (!path.startsWith("/api/")) {
-      const assetUrl = new URL(request.url); assetUrl.pathname = path;
+      const assetUrl = new URL(request.url);
+      assetUrl.pathname = isMarketingHost && (path === "/" || path === "/index.html") ? "/registro.html" : path;
       return env.ASSETS.fetch(new Request(assetUrl, request));
     }
-
     try {
       const db = env.DB;
       if (!db) return json({ error: "Base de datos no disponible" }, 500);
