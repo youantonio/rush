@@ -1,6 +1,31 @@
 // RUSH POS v24.3 - Cloudflare Worker + D1
 const ROLES = ["admin", "mesero", "cocina", "barra", "repartidor", "editor"];
 
+// ÍNDICE (se regenera con cada versión — no editar a mano; ver tests/README.md):
+//   L29    ===== FOTOS: Google Drive → proxy con caché → Cloudflare R2
+//   L164   ===== NEGOCIOS (multi-tenant): cada restaurante vive en /t/<slug>/…
+//   L445   ===== PUBLICO (sin sesion): pagina de pedidos y tarjeta de lealtad
+//   L559   ===== LOGIN (único endpoint sin sesión)
+//   L593   ===== Estado del negocio: prueba, activo o bloqueado
+//   L610   ===== Bloqueo: si el negocio ya no está activo, nada de /api/* funciona salvo lo de arriba
+//   L665   ===== Sesión obligatoria para todo lo demás
+//   L674   ===== Asistente de primera sesión: elegir módulos
+//   L686   ===== Panel de super-admin (solo para "rush", que opera la plataforma)
+//   L710   ===== USUARIOS (solo admin)
+//   L831   ===== EQUIPO CON WHATSAPP (para avisos de comanda y "listo")
+//   L841   ===== ADMIN EN TURNO: quién recibe los pedidos por WhatsApp
+//   L875   ===== REPARTIDORES
+//   L918   ===== CLIENTES (se arman con los datos de las órdenes)
+//   L968   ===== MENÚ
+//   L1026  ===== FOTOS (R2)
+//   L1290  ===== MESAS
+//   L1301  ===== CANCHAS Y RESERVAS (antes sin backend: la pantalla se veía vacía sin avisar)
+//   L1360  ===== ÓRDENES
+//   L1485  ===== CAJA
+//   L1536  ===== TURNOS (mínimo 2 al día: matutino y vespertino)
+//   L1577  ===== ANULAR COBROS (clave del admin en turno + clave del sistema)
+//   L1720  ===== INVENTARIO (control manual de insumos)
+//   L1781  ===== Aún no implementados
 // ===== FOTOS: Google Drive → proxy con caché → Cloudflare R2 =====
 // Extrae el ID de cualquier link de Drive (uc?id=, /file/d/ID, open?id=, thumbnail?id=, lh3/d/ID)
 function driveId(u) {
@@ -162,6 +187,7 @@ async function ensureTenantsSchema(db) {
   }
 }
 let tenantsSchemaReady = false;
+let courtsSchemaReady = false;
 let tenantColsReady = false;
 // Todo lo existente queda marcado del negocio "rush" (no cambia nada para The Rush).
 // Se corre AL FINAL, cuando ya existen todas las tablas pos_* (algunas se crean más abajo).
@@ -253,6 +279,9 @@ export default {
           ["menu_tagline", "Tu ritual empieza aquí, entre espuma y aroma"],
           ["business_hours", "Abierto de 8:00 a.m. a 11:00 p.m."],
           ["show_photos", "1"],
+          ["google_reviews_link", ""], ["instagram_link", ""], ["facebook_link", ""],
+          ["wifi_network", ""], ["wifi_password", ""], ["promo_link", ""],
+          ["hub_extra_links", "[]"], ["hub_tagline", ""],
         ];
         if (tenantId === "rush") {
           for (const [k, v] of defSettings) await db.prepare("INSERT OR IGNORE INTO pos_settings (key,value) VALUES (?,?)").bind(k, v).run();
@@ -423,6 +452,10 @@ export default {
           loyalty_goal: Number(st.loyalty_goal) || 10, loyalty_reward: st.loyalty_reward,
           menu_tagline: st.menu_tagline || "", business_hours: st.business_hours || "",
           show_photos: st.show_photos !== "0",
+          google_reviews_link: st.google_reviews_link || "", instagram_link: st.instagram_link || "",
+          facebook_link: st.facebook_link || "", wifi_network: st.wifi_network || "", wifi_password: st.wifi_password || "",
+          promo_link: st.promo_link || "", hub_tagline: st.hub_tagline || "",
+          hub_extra_links: (() => { try { return JSON.parse(st.hub_extra_links || "[]"); } catch (e) { return []; } })(),
         });
       }
       if (path === "/api/public-menu" && request.method === "GET") {
@@ -1263,6 +1296,65 @@ export default {
         } catch (e) {}
         if (tables.length === 0) tables = [{ id: "t1", name: "Mesa 1", capacity: 4, type: "mesa", status: "open" }];
         return json(tables);
+      }
+
+      // ===== CANCHAS Y RESERVAS (antes sin backend: la pantalla se veía vacía sin avisar) =====
+      if (!courtsSchemaReady) {
+        await db.prepare(
+          `CREATE TABLE IF NOT EXISTS pos_courts (
+             id TEXT PRIMARY KEY, name TEXT NOT NULL, hourly_rate REAL DEFAULT 0, active INTEGER DEFAULT 1, tenant_id TEXT DEFAULT 'rush')`
+        ).run();
+        await db.prepare(
+          `CREATE TABLE IF NOT EXISTS pos_reservations (
+             id TEXT PRIMARY KEY, court_id TEXT, customer_name TEXT, customer_phone TEXT, date TEXT, start_time TEXT,
+             hours REAL, total_price REAL, deposit REAL DEFAULT 0, tenant_id TEXT DEFAULT 'rush', created_at TEXT DEFAULT (datetime('now')))`
+        ).run();
+        courtsSchemaReady = true;
+      }
+      if (path === "/api/courts" && request.method === "GET") {
+        const { results } = await db.prepare("SELECT * FROM pos_courts WHERE active=1 AND tenant_id=? ORDER BY name").bind(tenantId).all();
+        return json(results || []);
+      }
+      if (path === "/api/courts" && request.method === "POST") {
+        if (!isAdmin) return json({ error: "Solo el administrador puede agregar canchas" }, 403);
+        const b = await request.json().catch(() => ({}));
+        const name = String(b.name || "").trim();
+        if (!name) return json({ error: "Escribe el nombre de la cancha" }, 400);
+        const id = crypto.randomUUID();
+        await db.prepare("INSERT INTO pos_courts (id,name,hourly_rate,active,tenant_id) VALUES (?,?,?,1,?)")
+          .bind(id, name, Number(b.hourly_rate) || 0, tenantId).run();
+        return json({ id }, 201);
+      }
+      const crtm = path.match(/^\/api\/courts\/([^\/]+)$/);
+      if (crtm && request.method === "DELETE") {
+        if (!isAdmin) return json({ error: "Solo el administrador puede quitar canchas" }, 403);
+        await db.prepare("UPDATE pos_courts SET active=0 WHERE id=? AND tenant_id=?").bind(decodeURIComponent(crtm[1]), tenantId).run();
+        return json({ ok: true });
+      }
+      if (path === "/api/reservations" && request.method === "GET") {
+        const { results } = await db.prepare(
+          `SELECT r.*, c.name AS court_name FROM pos_reservations r LEFT JOIN pos_courts c ON c.id = r.court_id
+           WHERE r.tenant_id=? AND r.date >= date('now','-1 day') ORDER BY r.date, r.start_time`
+        ).bind(tenantId).all();
+        return json(results || []);
+      }
+      if (path === "/api/reservations" && request.method === "POST") {
+        const b = await request.json().catch(() => ({}));
+        const name = String(b.customer_name || "").trim();
+        const phone = String(b.customer_phone || "").replace(/\D/g, "").slice(-10);
+        if (!name || phone.length !== 10) return json({ error: "Nombre y WhatsApp (10 dígitos) son obligatorios" }, 400);
+        if (!b.court_id || !b.date || !b.start_time) return json({ error: "Elige cancha, fecha y hora" }, 400);
+        const id = crypto.randomUUID();
+        await db.prepare(
+          `INSERT INTO pos_reservations (id,court_id,customer_name,customer_phone,date,start_time,hours,total_price,deposit,tenant_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?)`
+        ).bind(id, b.court_id, name, phone, b.date, b.start_time, Number(b.hours) || 1, Number(b.total_price) || 0, Number(b.deposit) || 0, tenantId).run();
+        return json({ id }, 201);
+      }
+      const resm = path.match(/^\/api\/reservations\/([^\/]+)$/);
+      if (resm && request.method === "DELETE") {
+        await db.prepare("DELETE FROM pos_reservations WHERE id=? AND tenant_id=?").bind(decodeURIComponent(resm[1]), tenantId).run();
+        return json({ ok: true });
       }
 
       // ===== ÓRDENES =====
