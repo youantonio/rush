@@ -21,7 +21,8 @@ header{background:#111;color:#fff;padding:15px 18px;position:sticky;top:0;z-inde
 .brand{font-size:24px;font-weight:900;letter-spacing:.3px}
 .sub{color:#bbb;margin-top:3px;font-size:13px}
 .pill{padding:8px 12px;border-radius:999px;background:#205f32;font-size:13px}
-nav{display:flex;gap:8px;overflow:auto;padding:10px 14px;background:#fff;border-bottom:1px solid #ddd;position:sticky;top:66px;z-index:15}
+nav{display:flex;gap:8px;overflow:auto;padding:10px 14px;background:#fff;border-bottom:1px solid #ddd;position:sticky;top:66px;z-index:15;align-items:center}
+nav .nav-sep{width:1px;align-self:stretch;background:#e2e2e2;flex-shrink:0;margin:2px 2px}
 nav button{white-space:nowrap;padding:10px 14px} .active{background:#111;color:#fff}
 main{max-width:1180px;margin:auto;padding:16px}
 .title{font-size:29px;font-weight:900;margin:0 0 14px}
@@ -75,6 +76,43 @@ table{width:100%;border-collapse:collapse;background:#fff} th,td{text-align:left
 .carta-card .photo-actions label{flex:1;text-align:center;background:#f3f4f6;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer}
 .modchip{border:2px solid #e5e7eb;border-radius:12px;padding:12px 8px;text-align:center;cursor:pointer;font-weight:700;font-size:13px}
 .modchip.on{border-color:var(--brand,#064E3B);background:rgba(6,78,59,.08)}
+/* ===== Móvil: mismo diseño, adaptado a pantalla chica ===== */
+header{padding-top:calc(15px + env(safe-area-inset-top,0px))}
+body{padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (max-width:760px){
+  header{position:static}
+  nav{top:0;padding:8px 10px;gap:6px}
+  nav button{padding:9px 12px;font-size:13px}
+  .top{flex-wrap:wrap;row-gap:8px}
+  .brand{font-size:20px}
+  .sub{font-size:12px}
+  header .row{flex-wrap:wrap;row-gap:6px}
+  .pill{font-size:11px;padding:6px 10px}
+  main{padding:12px}
+  .title{font-size:22px;margin-bottom:10px}
+  .grid{grid-template-columns:1fr;gap:10px}
+  .card{padding:14px;border-radius:14px}
+  button{padding:12px 14px;font-size:14px}
+  input,select,textarea{font-size:16px} /* evita que iOS haga zoom solo al tocar un campo */
+  .product-grid{gap:8px}
+  .product{min-height:118px;padding:12px}
+  .product b{font-size:15px}
+  .modalbox{width:94vw;max-width:94vw;max-height:88vh;padding:14px;border-radius:16px}
+  table{font-size:13px}
+  th,td{padding:8px 6px}
+  .row{flex-wrap:wrap;row-gap:8px}
+  .row.between{align-items:flex-start}
+  .search{font-size:15px;padding:13px 14px}
+  .sectab{padding:10px 16px;font-size:14px}
+  .loginbox{padding:22px;border-radius:20px}
+  .login h1{font-size:30px}
+  .carta-grid{grid-template-columns:1fr 1fr}
+}
+@media (max-width:380px){
+  .carta-grid{grid-template-columns:1fr}
+  .brand{font-size:18px}
+  .title{font-size:20px}
+}
 </style>
 </head>
 <body>
@@ -148,8 +186,10 @@ table{width:100%;border-collapse:collapse;background:#fff} th,td{text-align:left
 
 <section id="canchas" class="view hidden">
   <h1 class="title">🎾 Reservas de Canchas</h1>
+  <div id="courtsAdminBox"></div>
   <div class="card" style="margin-bottom:15px; background:#f0fdf4; border:1px solid #16a34a;">
     <h2>📅 Agendar Cancha</h2>
+    <div id="noCourtsMsg" class="hidden" style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:10px;margin-top:10px;font-size:13px">🎾 Todavía no tienes canchas creadas. Agrega la primera arriba.</div>
     <div class="grid" style="margin-top:12px;">
       <label>Cancha:<select id="resCourtSelect" onchange="updateResTotal()"></select></label>
       <label>Fecha:<input type="date" id="resDate"></label>
@@ -332,6 +372,39 @@ table{width:100%;border-collapse:collapse;background:#fff} th,td{text-align:left
       <label>WhatsApp general de respaldo (10 dígitos):<input id="cfgWaNumber" maxlength="10" placeholder="Se usa si no hay admin en turno"></label>
       <label>Link de Rappi:<input id="cfgRappi" placeholder="https://..."></label>
       <label>Link de Uber Eats:<input id="cfgUber" placeholder="https://..."></label>
+    </div>
+  </div>
+  <div class="card" style="margin-top:15px; background:#eff6ff; border:1px solid #93c5fd;">
+    <h2 style="margin-top:0">🔗 Hub de enlaces (para tu QR de mesa/stand)</h2>
+    <p class="muted" style="margin-top:-4px">Una sola página con menú, redes, WiFi y más — ideal para un QR físico en tu negocio, como el de un stand con NFC.</p>
+    <div class="grid">
+      <label>Frase de bienvenida del hub (opcional):<input id="hubTagline" placeholder="Bienvenido, elige una opción"></label>
+      <label>Link de reseñas de Google:<input id="hubGoogle" placeholder="https://g.page/r/..."></label>
+      <label>Instagram:<input id="hubInstagram" placeholder="https://instagram.com/tu_negocio"></label>
+      <label>Facebook:<input id="hubFacebook" placeholder="https://facebook.com/tu_negocio"></label>
+      <label>Red de WiFi:<input id="hubWifiNet" placeholder="Nombre de la red"></label>
+      <label>Contraseña de WiFi:<input id="hubWifiPass" placeholder="Contraseña"></label>
+      <label>Link de promociones (imagen o PDF):<input id="hubPromo" placeholder="https://..."></label>
+    </div>
+    <div style="margin-top:10px">
+      <label class="muted" style="font-size:13px;font-weight:700">Otros enlaces (uno por línea, formato: Texto | https://link)</label>
+      <textarea id="hubExtra" rows="3" placeholder="Reservaciones | https://...&#10;Sitio web | https://..."></textarea>
+    </div>
+    <div class="row" style="margin-top:10px;gap:6px;flex-wrap:wrap">
+      <button class="primary" onclick="saveHub()">💾 Guardar hub</button>
+      <button onclick="copyHubLink()">🔗 Copiar link del hub</button>
+      <a id="hubOpenBtn" href="#" target="_blank">👁️ Ver mi hub</a>
+    </div>
+    <input id="hubLinkBox" readonly style="margin-top:8px;font-weight:bold" onclick="this.select()">
+    <div class="row" style="margin-top:14px;gap:16px;align-items:center;flex-wrap:wrap">
+      <img id="hubQr" src="" alt="QR del hub" style="width:150px;height:150px;border-radius:10px;border:1px solid #e5e7eb;background:#fff;padding:6px">
+      <div>
+        <p class="muted" style="font-size:13px;margin:0 0 8px">Imprime este QR y pégalo en tu mesa, stand o entrada. Al escanearlo, el cliente ve el hub completo.</p>
+        <div class="row" style="gap:6px;flex-wrap:wrap">
+          <button onclick="printHubQr()">🖨️ Imprimir QR</button>
+          <a id="hubQrDownload" download="qr-hub.png" href="#">⬇️ Descargar imagen</a>
+        </div>
+      </div>
     </div>
   </div>
   <div class="card" style="margin-top:15px;">
@@ -597,23 +670,13 @@ function showApp(){
   $("userPill").textContent=`● ${me.name||me.username} (${me.role})`;
   if(isAdmin()) refreshDutyPill(); else $("dutyPill").classList.add("hidden");
 
+  // Agrupado por lo que se usa a diario, lo del negocio, y lo administrativo — no por orden de cuándo se agregó
   let nav=[
-    ["venta","🛒 Venta"],
-    ["canchas","🎾 Canchas"],
-    ["mesas","🪑 Mesas"],
-    ["cocina","👨‍🍳 Cocina"],
-    ["barra","☕ Barra"],
-    ["ordenes","📋 Órdenes"],
-    ["caja","📊 Caja"],
-    ["lealtad","⭐ Lealtad"],
-    ["inventario","📦 Inventario"],
-    ["productos","🍔 Menú"],
-    ["carta","🖼️ Editar carta"],
-    ["usuarios","👥 Usuarios"],
-    ["turnos","🗓️ Turnos"],
-    ["plataforma","🏢 Mis restaurantes"],
-    ["config","⚙️ Configuración"],
-    ["entregas","🛵 Mis entregas"]
+    ["venta","🛒 Venta","Operación"], ["canchas","🎾 Canchas","Operación"], ["mesas","🪑 Mesas","Operación"],
+    ["cocina","👨‍🍳 Cocina","Operación"], ["barra","☕ Barra","Operación"], ["ordenes","📋 Órdenes","Operación"], ["entregas","🛵 Mis entregas","Operación"],
+    ["caja","📊 Caja","Negocio"], ["lealtad","⭐ Lealtad","Negocio"], ["inventario","📦 Inventario","Negocio"],
+    ["productos","🍔 Menú","Admin"], ["carta","🖼️ Editar carta","Admin"], ["usuarios","👥 Usuarios","Admin"],
+    ["turnos","🗓️ Turnos","Admin"], ["plataforma","🏢 Mis restaurantes","Admin"], ["config","⚙️ Configuración","Admin"]
   ];
   const ROLE_VIEWS={ admin:null, mesero:["venta","canchas","mesas","ordenes"], cocina:["cocina"], barra:["barra"], repartidor:["entregas"], editor:["carta"] };
   const allowed = ROLE_VIEWS[me.role]===undefined ? ["venta","ordenes"] : ROLE_VIEWS[me.role];
@@ -622,7 +685,12 @@ function showApp(){
   if(tenantModules) nav = nav.filter(x=> !MOD_FOR[x[0]] || tenantModules[MOD_FOR[x[0]]]);
   if(!(myTenant && myTenant.slug==="rush")) nav = nav.filter(x=>x[0]!=="plataforma");
 
-  $("nav").innerHTML=nav.map((x,i)=>`<button class="${i===0?"active":""}" onclick="view('${x[0]}',this)">${x[1]}</button>`).join("");
+  let navHtml="", lastGroup=null, first=true;
+  nav.forEach(x=>{
+    if(x[2]!==lastGroup){ if(lastGroup!==null) navHtml+=`<span class="nav-sep" aria-hidden="true"></span>`; lastGroup=x[2]; }
+    navHtml+=`<button class="${first?"active":""}" onclick="view('${x[0]}',this)">${x[1]}</button>`; first=false;
+  });
+  $("nav").innerHTML=navHtml;
   view(nav[0][0], $("nav").firstElementChild);
 }
 
@@ -807,11 +875,30 @@ async function sendOrder(){
 async function loadCanchasData(){
   try{
     courtsList = await api("/courts").catch(()=>[]); if(!Array.isArray(courtsList)) courtsList=[];
-    $("resCourtSelect").innerHTML = courtsList.map(c=>`<option value="${c.id}">${c.name}</option>`).join(""); updateResTotal();
+    $("resCourtSelect").innerHTML = courtsList.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join(""); updateResTotal();
+    $("noCourtsMsg").classList.toggle("hidden", courtsList.length>0);
+    if(isAdmin()) renderCourtsAdmin(); else $("courtsAdminBox").innerHTML="";
     activeReservations = await api("/reservations").catch(()=>[]); if(!Array.isArray(activeReservations)) activeReservations=[];
-    $("reservationsList").innerHTML = activeReservations.length ? `<table><thead><tr><th>Cancha</th><th>Cliente</th><th>Fecha/Hora</th><th>Total</th><th>Acciones</th></tr></thead><tbody>${activeReservations.map(r=>`<tr><td><b>${r.court_name}</b></td><td>${r.customer_name}</td><td>${r.date} a las ${r.start_time}</td><td>$${r.total_price}</td><td><button class="success" onclick="sendReservationWhatsApp('${r.id}')">💬</button> <button class="danger" onclick="deleteReservation('${r.id}')">🗑️</button></td></tr>`).join("")}</tbody></table>` : "<p class='muted'>Sin reservas.</p>";
+    $("reservationsList").innerHTML = activeReservations.length ? `<table><thead><tr><th>Cancha</th><th>Cliente</th><th>Fecha/Hora</th><th>Total</th><th>Acciones</th></tr></thead><tbody>${activeReservations.map(r=>`<tr><td><b>${esc(r.court_name||'—')}</b></td><td>${esc(r.customer_name)}</td><td>${esc(r.date)} a las ${esc(r.start_time)}</td><td>$${r.total_price}</td><td><button class="success" onclick="sendReservationWhatsApp('${r.id}')">💬</button> <button class="danger" onclick="deleteReservation('${r.id}')">🗑️</button></td></tr>`).join("")}</tbody></table>` : "<p class='muted'>Sin reservas.</p>";
   }catch(e){}
 }
+function renderCourtsAdmin(){
+  $("courtsAdminBox").innerHTML = `<div class="card" style="margin-bottom:15px;background:#eff6ff;border:1px solid #93c5fd">
+    <h2 style="margin-top:0">🎾 Tus canchas</h2>
+    ${courtsList.length? courtsList.map(c=>`<div class="row between" style="padding:5px 0;border-bottom:1px solid #eee"><span><b>${esc(c.name)}</b> <span class="muted">$${c.hourly_rate||0}/hora</span></span><button class="danger" onclick="deleteCourt('${c.id}')">🗑️</button></div>`).join("") : "<p class='muted'>Aún no tienes canchas.</p>"}
+    <div class="grid" style="margin-top:10px">
+      <input id="newCourtName" placeholder="Nombre (ej. Cancha 1)">
+      <input id="newCourtRate" type="number" step="1" placeholder="Precio por hora">
+      <button class="primary" onclick="createCourt()" style="grid-column:1/-1">➕ Agregar cancha</button>
+    </div>
+  </div>`;
+}
+async function createCourt(){
+  const name=$("newCourtName").value.trim(); if(!name) return toast("Escribe el nombre de la cancha.");
+  try{ await api("/courts",{method:"POST",body:JSON.stringify({name, hourly_rate:Number($("newCourtRate").value)||0})}); toast("Cancha agregada ✅"); loadCanchasData(); }
+  catch(e){ toast(e.message); }
+}
+async function deleteCourt(id){ if(!confirm("¿Quitar esta cancha?")) return; try{ await api("/courts/"+encodeURIComponent(id),{method:"DELETE"}); toast("Cancha eliminada"); loadCanchasData(); }catch(e){ toast(e.message); } }
 function updateResTotal(){ const court = courtsList.find(c=>String(c.id)===$("resCourtSelect").value); if(court) $("resCustomTotal").value = court.hourly_rate * Number($("resHours").value || 1.5); }
 async function createReservation(){
   const phone = $("resPhone").value.trim(), name = $("resName").value.trim();
@@ -1079,6 +1166,13 @@ async function loadSettings(){
   $("joinLinkBox").value = location.origin + BASE + "unirme.html";
   $("cfgShowPhotos").checked = settingsCache.show_photos!=="0";
   $("cfgTagline").value=settingsCache.menu_tagline||""; $("cfgHours").value=settingsCache.business_hours||"";
+  $("hubTagline").value=settingsCache.hub_tagline||""; $("hubGoogle").value=settingsCache.google_reviews_link||"";
+  $("hubInstagram").value=settingsCache.instagram_link||""; $("hubFacebook").value=settingsCache.facebook_link||"";
+  $("hubWifiNet").value=settingsCache.wifi_network||""; $("hubWifiPass").value=settingsCache.wifi_password||"";
+  $("hubPromo").value=settingsCache.promo_link||"";
+  try{ $("hubExtra").value=(JSON.parse(settingsCache.hub_extra_links||"[]")||[]).map(x=>`${x.label} | ${x.url}`).join("\n"); }catch(e){ $("hubExtra").value=""; }
+  $("hubLinkBox").value = location.origin + BASE + "hub.html"; $("hubOpenBtn").href = BASE + "hub.html";
+  updateHubQr();
   loadDuty(); loadR2Status();
 }
 // ===== ANULAR COBROS =====
@@ -1433,6 +1527,31 @@ async function saveSettings(){
   }catch(e){ toast(e.message); }
 }
 function copyPublicLink(){ $("publicLinkBox").select(); document.execCommand("copy"); toast("Link copiado 📋"); }
+async function saveHub(){
+  const extra=$("hubExtra").value.split("\n").map(l=>l.trim()).filter(Boolean).map(l=>{
+    const [label,...rest]=l.split("|"); return {label:(label||"").trim(), url:rest.join("|").trim()};
+  }).filter(x=>x.label && x.url);
+  try{
+    await api("/settings",{method:"PATCH",body:JSON.stringify({
+      hub_tagline:$("hubTagline").value.trim(), google_reviews_link:$("hubGoogle").value.trim(),
+      instagram_link:$("hubInstagram").value.trim(), facebook_link:$("hubFacebook").value.trim(),
+      wifi_network:$("hubWifiNet").value.trim(), wifi_password:$("hubWifiPass").value.trim(),
+      promo_link:$("hubPromo").value.trim(), hub_extra_links:JSON.stringify(extra),
+    })});
+    toast("Hub guardado ✅");
+  }catch(e){ toast(e.message); }
+}
+function copyHubLink(){ $("hubLinkBox").select(); document.execCommand("copy"); toast("Link copiado 📋"); }
+function updateHubQr(){
+  const link=$("hubLinkBox").value; if(!link) return;
+  const qrUrl="https://api.qrserver.com/v1/create-qr-code/?size=500x500&data="+encodeURIComponent(link);
+  $("hubQr").src=qrUrl; $("hubQrDownload").href=qrUrl;
+}
+function printHubQr(){
+  const w=window.open("","_blank"); const link=$("hubLinkBox").value;
+  w.document.write('<html><head><title>QR</title><style>body{font-family:sans-serif;text-align:center;padding:40px}img{width:320px;height:320px}p{margin-top:14px;font-size:14px;word-break:break-all}</style></head><body><img src="'+$("hubQr").src+'"><p>'+link+'</p><scr'+'ipt>onload=()=>print()</scr'+'ipt></body></html>');
+  w.document.close();
+}
 
 // ----- Pedidos externos (Rappi/Uber/Domicilio directo) -----
 function openExternalOrderModal(){
