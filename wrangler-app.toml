@@ -1,3 +1,8 @@
+# Segundo Worker SOLO para la marca de registro (app.artmmx.workers.dev).
+# Es el MISMO código que "rush", con OTRO nombre — así la raíz "/" muestra
+# el registro público en vez del login de un negocio en particular.
+# Usa este archivo para ESE segundo Worker; deja wrangler.toml para "rush".
+
 name = "app"
 main = "server.js"
 compatibility_date = "2026-03-01"
@@ -5,12 +10,15 @@ compatibility_date = "2026-03-01"
 [assets]
 directory = "./public"
 binding = "ASSETS"
+run_worker_first = true
 
+# Mismo ID de base de datos que en wrangler.toml — así ven los mismos negocios.
 [[d1_databases]]
 binding = "DB"
 database_name = "rush-pos-db"
 database_id = "79ed43c7-40b8-4a8a-bec5-1fd69449774b"
 
+# Mismo bucket de fotos que en wrangler.toml.
 [[r2_buckets]]
 binding = "PHOTOS"
 bucket_name = "rush-fotos"
