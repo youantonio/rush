@@ -1,4 +1,4 @@
-# RUSH POS v30.0 — "The Rush: Club · Café · Cocina"
+# RUSH POS v31.1 — "The Rush: Club · Café · Cocina"
 
 - **Fecha:** 25 de septiembre de 2026
 - **Plataforma:** Cloudflare Workers + D1 (`rush-pos-db`)
@@ -20,7 +20,9 @@
 | v27.4 | Candidata a estable. Cadena completa de avisos por WhatsApp (comanda → listo → entregado → ticket cobrado) y pantalla de Turnos con recordatorio diario. |
 | v28.0 | Primer paso a SaaS multi-negocio. The Rush sigue funcionando exactamente igual (sin prefijo en la URL). Nuevo: registro público, cada negocio en /t/<slug>/, asistente de módulos, bloqueo automático a los 30 días de prueba, panel de plataforma para Antonio. |
 | v29.0 | Panel de lealtad estilo Almendro (KPIs, QR para unirse, feed en vivo) + corrección crítica: el panel y la carta de un negocio nuevo escribían por error en los datos de The Rush. |
-| **v30.0** | Quita "RUSH POS" de las pantallas genéricas (login, registro, plataforma) → ahora dicen "Artmmx", ya que ese texto lo ve cualquier negocio nuevo, no solo The Rush. Agrega `MAPA-LINEAS.md`. |
+| v30.0 | Quita "RUSH POS" de las pantallas genéricas (login, registro, plataforma) → ahora dicen "Artmmx", ya que ese texto lo ve cualquier negocio nuevo, no solo The Rush. Agrega `MAPA-LINEAS.md`. |
+| v31.0 | Separa la marca de registro de "rush.artmmx.workers.dev": ahora cualquier dirección que NO empiece con "rush." muestra el registro público en la raíz "/". Agrega `wrangler-app.toml` para el segundo Worker. |
+| **v31.1** | Agrega `run_worker_first = true` a los dos wrangler.toml — sin esto, Cloudflare servía `index.html` directo y nunca dejaba que el código decidiera mostrar el registro en la raíz de "app". |
 
 No hay versión marcada como estable todavía.
 
@@ -438,3 +440,69 @@ La pantalla de login, la de registro y el panel de plataforma las ve **cualquier
 A partir de la v31, para pedir un cambio puedes decir el número de línea o el nombre de la función/endpoint, usando este mapa. Yo reviso esa línea exacta antes de tocar nada, así evitamos que un cambio afecte otra parte por accidente.
 
 **Aviso importante:** los números de línea cambian cada vez que se edita el archivo. Este mapa es válido para la v30.0 tal cual viene en este zip; en cuanto hagamos el siguiente cambio, genero un mapa actualizado para que sigas usándolo con la versión más reciente.
+
+
+---
+
+## v31.0 — Separar la marca: registro fuera de "rush."
+
+**Fecha:** 26 de septiembre de 2026
+
+### Por qué
+`rush.artmmx.workers.dev` es y debe seguir siendo de **The Rush**. La página para que otros negocios se suscriban no debía vivir bajo ese nombre.
+
+### ⚠️ Límite real de Cloudflare (léelo antes de continuar)
+En `workers.dev` **no existe** una dirección "pelona". Siempre es `<algo>.artmmx.workers.dev`. No hay forma de que solo `artmmx.workers.dev` funcione sin comprar un dominio propio (ver Paso 3).
+
+### Qué cambió en el código
+Cualquier dirección que **NO empiece con "rush."** ahora muestra el **registro público** en la raíz `/`, en vez del login de un negocio. `rush.artmmx.workers.dev` seguirá funcionando exactamente igual que hoy: login de The Rush en `/`, y los negocios que se van uniendo en `/t/<su-nombre>/`.
+
+### Paso 1: crea el segundo Worker (una sola vez)
+1. Cloudflare → **Workers & Pages** → **Create** → **Worker**.
+2. Nombre: **`app`** (o el que prefieras, mientras no empiece con "rush").
+3. Despliega ese Worker vacío primero para que exista.
+4. En ese Worker → **Settings → Bindings**, agrega:
+   - **D1 Database:** el mismo `rush-pos-db` que ya usas.
+   - **R2 Bucket:** el mismo `rush-fotos` que ya usas.
+   - Usa los mismos nombres de variable (`DB` y `PHOTOS`) que en tu Worker "rush".
+
+### Paso 2: sube el código
+Sube los mismos archivos de este zip (`server.js` y la carpeta `public/`) a este nuevo Worker "app", igual que lo haces con "rush". El archivo `wrangler-app.toml` es la referencia de esa configuración si usas la línea de comandos; si subes por el panel, solo usa el Paso 1.
+
+### Paso 3 (después, opcional): dominio propio
+Cuando quieras una dirección de verdad "pelona" (ej. `artmmx.com`), compra el dominio, conéctalo en Cloudflare, y apunta su ruta raíz a este mismo Worker "app". Dímelo cuando llegue el momento y te ayudo con esa parte.
+
+### Prueba rápida
+1. Abre `https://rush.artmmx.workers.dev/` → debe seguir siendo el login de The Rush, igual que siempre.
+2. Abre `https://app.artmmx.workers.dev/` → debe mostrar el registro público, no un login.
+3. Registra un negocio de prueba desde ahí y confirma que puedes entrar a `https://rush.artmmx.workers.dev/t/su-nombre/` con la cuenta que creaste.
+
+
+---
+
+## v31.1 — La pieza que faltaba: `run_worker_first`
+
+**Fecha:** 26 de septiembre de 2026
+
+### El problema real (ya resuelto)
+Cuando una dirección coincide exacto con un archivo de `public/` (como `/` → `index.html`), Cloudflare lo entrega **directo, sin pasar por tu código**. Por eso `app.artmmx.workers.dev/` seguía mostrando el login, aunque `server.js` ya tenía la lógica correcta: nunca llegaba a ejecutarse.
+
+### La corrección
+Se agregó esta línea al bloque `[assets]` de **ambos** `wrangler.toml` y `wrangler-app.toml`:
+```toml
+run_worker_first = true
+```
+Con esto, **toda** dirección pasa primero por `server.js`, que decide qué mostrar.
+
+### Esta carpeta viene limpia y completa
+Todos los archivos, listos para reemplazar los que tienes en GitHub tal cual (mismo nombre, mismo lugar). No hace falta ninguna base de datos nueva ni SQL — solo reemplazar archivos.
+
+### Cómo subirla
+1. En tu repo de GitHub, reemplaza **cada archivo** por el de esta carpeta (mismo nombre): `server.js`, `wrangler.toml`, `wrangler-app.toml`, `README.md`, `MAPA-LINEAS.md`, y todo dentro de `public/`.
+2. La carpeta `sql/` la puedes dejar como está — no cambió.
+3. Guarda (commit) — dispara el build en los dos Workers ("rush" y "app").
+4. Espera 1-2 minutos y prueba:
+   - `https://app.artmmx.workers.dev/` → debe salir el registro.
+   - `https://rush.artmmx.workers.dev/` → debe seguir igual que siempre.
+
+No hace falta correr nada en D1 para esta versión.
