@@ -200,6 +200,8 @@ export default {
       assetUrl.pathname = isMarketingHost && (path === "/" || path === "/index.html") ? "/registro.html" : path;
       return env.ASSETS.fetch(new Request(assetUrl, request));
     }
+
+
     try {
       const db = env.DB;
       if (!db) return json({ error: "Base de datos no disponible" }, 500);
