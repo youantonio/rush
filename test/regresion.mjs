@@ -109,3 +109,6 @@ check('turnos: endpoint responde', shiftsStatus.current_shift !== undefined);
 // ---- Resultado ----
 console.log(`\n${pass} pruebas bien, ${fail} fallaron.`);
 if (fail > 0) process.exit(1);
+// ---- Resultado ----
+console.log(`\n${pass} pruebas bien, ${fail} fallaron.`);
+if (fail > 0) process.exit(1);
