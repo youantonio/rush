@@ -5,29 +5,29 @@ const ROLES = ["admin", "mesero", "cocina", "barra", "repartidor", "editor"];
 //   L31    ===== FOTOS: Google Drive → proxy con caché → Cloudflare R2
 //   L166   ===== NEGOCIOS (multi-tenant): cada restaurante vive en /t/<slug>/…
 //   L194   ===== NOTIFICACIONES PUSH (protocolo Web Push: RFC 8291 cifrado + RFC 8292 VAPID)
-//   L579   ===== LOGIN (único endpoint sin sesión)
-//   L613   ===== Estado del negocio: prueba, activo o bloqueado
-//   L630   ===== Bloqueo: si el negocio ya no está activo, nada de /api/* funciona salvo lo de arriba
-//   L701   ===== Sesión obligatoria para todo lo demás
-//   L710   ===== NOTIFICACIONES PUSH: suscripción del celular/navegador
-//   L752   ===== PUBLICO (sin sesion): pagina de pedidos y tarjeta de lealtad
-//   L845   ===== Asistente de primera sesión: elegir módulos
-//   L857   ===== Panel de super-admin (solo para "rush", que opera la plataforma)
-//   L881   ===== USUARIOS (solo admin)
-//   L1002  ===== EQUIPO CON WHATSAPP (para avisos de comanda y "listo")
-//   L1012  ===== ADMIN EN TURNO: quién recibe los pedidos por WhatsApp
-//   L1046  ===== REPARTIDORES
-//   L1089  ===== CLIENTES (se arman con los datos de las órdenes)
-//   L1140  ===== MENÚ
-//   L1198  ===== FOTOS (R2)
-//   L1462  ===== MESAS
-//   L1473  ===== CANCHAS Y RESERVAS (antes sin backend: la pantalla se veía vacía sin avisar)
-//   L1532  ===== ÓRDENES
-//   L1677  ===== CAJA
-//   L1728  ===== TURNOS (mínimo 2 al día: matutino y vespertino)
-//   L1769  ===== ANULAR COBROS (clave del admin en turno + clave del sistema)
-//   L1912  ===== INVENTARIO (control manual de insumos)
-//   L1973  ===== Aún no implementados
+//   L616   ===== LOGIN (único endpoint sin sesión)
+//   L650   ===== Estado del negocio: prueba, activo o bloqueado
+//   L667   ===== Bloqueo: si el negocio ya no está activo, nada de /api/* funciona salvo lo de arriba
+//   L738   ===== Sesión obligatoria para todo lo demás
+//   L747   ===== NOTIFICACIONES PUSH: suscripción del celular/navegador
+//   L792   ===== PUBLICO (sin sesion): pagina de pedidos y tarjeta de lealtad
+//   L885   ===== Asistente de primera sesión: elegir módulos
+//   L897   ===== Panel de super-admin (solo para "rush", que opera la plataforma)
+//   L921   ===== USUARIOS (solo admin)
+//   L1042  ===== EQUIPO CON WHATSAPP (para avisos de comanda y "listo")
+//   L1052  ===== ADMIN EN TURNO: quién recibe los pedidos por WhatsApp
+//   L1086  ===== REPARTIDORES
+//   L1129  ===== CLIENTES (se arman con los datos de las órdenes)
+//   L1180  ===== MENÚ
+//   L1238  ===== FOTOS (R2)
+//   L1502  ===== MESAS
+//   L1513  ===== CANCHAS Y RESERVAS (antes sin backend: la pantalla se veía vacía sin avisar)
+//   L1572  ===== ÓRDENES
+//   L1717  ===== CAJA
+//   L1768  ===== TURNOS (mínimo 2 al día: matutino y vespertino)
+//   L1809  ===== ANULAR COBROS (clave del admin en turno + clave del sistema)
+//   L1952  ===== INVENTARIO (control manual de insumos)
+//   L2013  ===== Aún no implementados
 // ===== FOTOS: Google Drive → proxy con caché → Cloudflare R2 =====
 // Extrae el ID de cualquier link de Drive (uc?id=, /file/d/ID, open?id=, thumbnail?id=, lh3/d/ID)
 function driveId(u) {
@@ -194,7 +194,7 @@ let courtsSchemaReady = false;
 // ===== NOTIFICACIONES PUSH (protocolo Web Push: RFC 8291 cifrado + RFC 8292 VAPID) =====
 // No dependen de que alguien toque "enviar": el servidor las manda solo, en el momento del evento.
 // Llaves PÚBLICAS: no son secretas (el navegador las recibe de todos modos), así que viven aquí y ya no dependen
-// de variables del Worker. Solo la PRIVADA (VAPID_PRIVATE_KEY) es un Secreto en Cloudflare.
+// de variables del Worker. La privada y las públicas definitivas viven en la base de datos (ver loadVapid).
 // Si algún día cambias de llaves, puedes definir VAPID_PUBLIC_KEY / _X / _Y como variables y esas tienen prioridad.
 const VAPID_DEFAULT = {
   key: "BLkoFSgOu_8bFSJ90S5rP9zUr8b-zUiAhcBborsVa39t575g7aMCw3plKFafl9kAumXNCvoQvz4aM3Rg7Z9svlI",
@@ -207,6 +207,43 @@ const vapidPub = (env) => ({
   y: env.VAPID_PUBLIC_Y || VAPID_DEFAULT.y,
 });
 let PUSH_SUBJECT = ""; // se llena en cada petición con el dominio actual
+// ---- Llaves VAPID ----
+// Fuente única de verdad: la base de datos (D1), que comparten los dos Workers. Así ya NO hay que pegar nada en Cloudflare.
+// - Si la tabla está vacía, se toma el Secreto VAPID_PRIVATE_KEY (si existe y es válido: se limpia de espacios, comillas y guiones "bonitos");
+// - si no hay secreto válido, el sistema genera un par nuevo y lo guarda.
+let VAPID_CACHE = null;
+const normKey = (v) => String(v || "")
+  .replace(/[\u2010-\u2015\u2212]/g, "-").replace(/[\s"'`]/g, "")
+  .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+function pubFromXY(x, y) {
+  const u = new Uint8Array(65); u[0] = 4; u.set(b64uToBytes(x), 1); u.set(b64uToBytes(y), 33);
+  return bytesToB64u(u);
+}
+async function loadVapid(db, env) {
+  if (VAPID_CACHE) return VAPID_CACHE;
+  await db.prepare("CREATE TABLE IF NOT EXISTS pos_push_keys (id TEXT PRIMARY KEY, d TEXT, x TEXT, y TEXT, created_at TEXT DEFAULT (datetime('now')))").run();
+  let row = await db.prepare("SELECT d, x, y FROM pos_push_keys WHERE id='vapid'").first();
+  if (!row) {
+    let seed = null;
+    const d = normKey(env.VAPID_PRIVATE_KEY);
+    if (d) {
+      const pub = vapidPub(env);
+      try {
+        await crypto.subtle.importKey("jwk", { kty: "EC", crv: "P-256", d, x: pub.x, y: pub.y, ext: true }, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+        seed = { d, x: pub.x, y: pub.y };
+      } catch (e) { /* secreto con un carácter distinto: se ignora y se genera uno nuevo */ }
+    }
+    if (!seed) {
+      const kp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+      const jwk = await crypto.subtle.exportKey("jwk", kp.privateKey);
+      seed = { d: jwk.d, x: jwk.x, y: jwk.y };
+    }
+    await db.prepare("INSERT OR IGNORE INTO pos_push_keys (id,d,x,y) VALUES ('vapid',?,?,?)").bind(seed.d, seed.x, seed.y).run();
+    row = await db.prepare("SELECT d, x, y FROM pos_push_keys WHERE id='vapid'").first();
+  }
+  VAPID_CACHE = { d: row.d, x: row.x, y: row.y, key: pubFromXY(row.x, row.y) };
+  return VAPID_CACHE;
+}
 const b64uToBytes = (s) => {
   s = s.replace(/-/g, "+").replace(/_/g, "/");
   while (s.length % 4) s += "=";
@@ -220,22 +257,21 @@ const bytesToB64u = (b) => {
   for (let i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i]);
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 };
-async function vapidHeaders(env, endpoint) {
+async function vapidHeaders(vapid, endpoint) {
   const url = new URL(endpoint);
   const aud = url.origin;
   const header = { typ: "JWT", alg: "ES256" };
   const exp = Math.floor(Date.now() / 1000) + 12 * 3600;
   // "sub" = contacto del servidor de notificaciones. Se usa la dirección real de este sitio (Apple valida que sea una URL o mailto: válida).
-  const claims = { aud, exp, sub: String(env.VAPID_SUBJECT || PUSH_SUBJECT || "https://artmmx.workers.dev") };
+  const claims = { aud, exp, sub: String(PUSH_SUBJECT || "https://artmmx.workers.dev") };
   const b64json = (o) => bytesToB64u(new TextEncoder().encode(JSON.stringify(o)));
   const unsigned = b64json(header) + "." + b64json(claims);
-  const pub = vapidPub(env);
-  const jwk = { kty: "EC", crv: "P-256", d: String(env.VAPID_PRIVATE_KEY || "").trim(), x: pub.x, y: pub.y, ext: true };
+  const jwk = { kty: "EC", crv: "P-256", d: vapid.d, x: vapid.x, y: vapid.y, ext: true };
   const key = await crypto.subtle.importKey("jwk", jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
   const sigDer = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, new TextEncoder().encode(unsigned));
   // Web Crypto firma en formato "raw" (r||s, 64 bytes) para ECDSA — es justo lo que pide un JWT ES256, sin convertir de DER.
   const jwt = unsigned + "." + bytesToB64u(sigDer);
-  return { Authorization: `vapid t=${jwt}, k=${pub.key}` };
+  return { Authorization: `vapid t=${jwt}, k=${vapid.key}` };
 }
 // Cifra el mensaje según RFC 8291 (aes128gcm) usando la llave pública del navegador (p256dh) y su secreto (auth).
 async function encryptPush(payloadObj, p256dhB64u, authB64u) {
@@ -270,10 +306,10 @@ async function encryptPush(payloadObj, p256dhB64u, authB64u) {
   header.set(serverPubRaw, 21);
   return concat(header, cipher);
 }
-async function sendPush(env, sub, payloadObj) {
+async function sendPush(vapid, sub, payloadObj) {
   try {
     const body = await encryptPush(payloadObj, sub.p256dh, sub.auth);
-    const auth = await vapidHeaders(env, sub.endpoint);
+    const auth = await vapidHeaders(vapid, sub.endpoint);
     const r = await fetch(sub.endpoint, {
       method: "POST",
       headers: { ...auth, "Content-Type": "application/octet-stream", "Content-Encoding": "aes128gcm", TTL: "86400", Urgency: "high" },
@@ -489,11 +525,12 @@ export default {
       // Manda un push a cada persona indicada (por id de usuario) que tenga notificaciones activadas en este negocio.
       // No requiere que nadie toque nada — a diferencia de WhatsApp, esto sí sale solo.
       const notifyUsers = async (userIds, payload) => {
-        if (!env.VAPID_PRIVATE_KEY || !userIds.length) return;
+        if (!userIds.length) return;
+        const vapid = await loadVapid(db, env);
         const q = userIds.map(() => "?").join(",");
         const subs = (await db.prepare(`SELECT * FROM pos_push_subs WHERE tenant_id=? AND user_id IN (${q})`).bind(tenantId, ...userIds).all()).results || [];
         for (const s of subs) {
-          const r = await sendPush(env, s, payload);
+          const r = await sendPush(vapid, s, payload);
           if (r.gone) await db.prepare("DELETE FROM pos_push_subs WHERE id=?").bind(s.id).run().catch(() => {});
         }
       };
@@ -708,7 +745,7 @@ export default {
       const isAdmin = sess.role === "admin";
 
       // ===== NOTIFICACIONES PUSH: suscripción del celular/navegador =====
-      if (path === "/api/push-vapid-key" && request.method === "GET") return json({ key: vapidPub(env).key });
+      if (path === "/api/push-vapid-key" && request.method === "GET") return json({ key: (await loadVapid(db, env)).key });
       if (path === "/api/push-subscribe" && request.method === "POST") {
         const b = await request.json().catch(() => ({}));
         const sub = b.subscription;
@@ -726,10 +763,13 @@ export default {
       if (path === "/api/push-test" && request.method === "POST") {
         const subs = (await db.prepare("SELECT * FROM pos_push_subs WHERE user_id=? AND tenant_id=?").bind(sess.user_id, tenantId).all()).results || [];
         if (!subs.length) return json({ error: "No tienes notificaciones activadas en este dispositivo" }, 400);
-        const results = await Promise.all(subs.map((s) => sendPush(env, s, { title: "🔔 Notificaciones activadas", body: "Así te van a llegar los avisos de RUSH POS.", tag: "test" })));
+        const vapid = await loadVapid(db, env);
+        const results = await Promise.all(subs.map((s) => sendPush(vapid, s, { title: "🔔 Notificaciones activadas", body: "Así te van a llegar los avisos de RUSH POS.", tag: "test" })));
+        const sent = results.filter((r) => r.ok).length;
         const bad = results.find((r) => !r.ok);
-        return json({ sent: results.filter((r) => r.ok).length, total: results.length,
-          reason: bad ? (bad.error ? "error: " + bad.error : "el servicio de notificaciones respondió " + bad.status + (bad.detail ? " (" + bad.detail + ")" : "")) : "" });
+        // Solo se reporta motivo si NO llegó a ningún dispositivo (un dispositivo viejo no debe tapar a uno que sí funciona)
+        return json({ sent, total: results.length,
+          reason: sent === 0 && bad ? (bad.error ? "error: " + bad.error : "el servicio de notificaciones respondió " + bad.status + (bad.detail ? " (" + bad.detail + ")" : "")) : "" });
       }
       // Estrella manual del admin, con motivo, ligada a la cuenta por WhatsApp (crea la tarjeta si no existía)
       if (path === "/api/loyalty-manual-stamp" && request.method === "POST") {
