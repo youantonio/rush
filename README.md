@@ -538,4 +538,4 @@ Se probó con un "servicio de notificaciones" simulado (el cifrado, la firma y q
 D1
 No hace falta correr SQL. El Worker crea solo la tabla `pos_push_subs`.
 Pruebas
-`cd tests && node push.mjs` (13 pruebas: suscripción, quién recibe cada aviso, cifrado, limpieza de dispositivos caducados y que todo siga funcionando si no hay llaves).
+`cd tests && node push.mjs` (13 pruebas: suscripción, quién recibe cada aviso, cifrado, limpieza de dispositivos caducados y que todo siga funcionando si no hay llaves)..
