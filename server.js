@@ -5,29 +5,29 @@ const ROLES = ["admin", "mesero", "cocina", "barra", "repartidor", "editor"];
 //   L31    ===== FOTOS: Google Drive → proxy con caché → Cloudflare R2
 //   L166   ===== NEGOCIOS (multi-tenant): cada restaurante vive en /t/<slug>/…
 //   L194   ===== NOTIFICACIONES PUSH (protocolo Web Push: RFC 8291 cifrado + RFC 8292 VAPID)
-//   L573   ===== LOGIN (único endpoint sin sesión)
-//   L607   ===== Estado del negocio: prueba, activo o bloqueado
-//   L624   ===== Bloqueo: si el negocio ya no está activo, nada de /api/* funciona salvo lo de arriba
-//   L695   ===== Sesión obligatoria para todo lo demás
-//   L704   ===== NOTIFICACIONES PUSH: suscripción del celular/navegador
-//   L744   ===== PUBLICO (sin sesion): pagina de pedidos y tarjeta de lealtad
-//   L837   ===== Asistente de primera sesión: elegir módulos
-//   L849   ===== Panel de super-admin (solo para "rush", que opera la plataforma)
-//   L873   ===== USUARIOS (solo admin)
-//   L994   ===== EQUIPO CON WHATSAPP (para avisos de comanda y "listo")
-//   L1004  ===== ADMIN EN TURNO: quién recibe los pedidos por WhatsApp
-//   L1038  ===== REPARTIDORES
-//   L1081  ===== CLIENTES (se arman con los datos de las órdenes)
-//   L1132  ===== MENÚ
-//   L1190  ===== FOTOS (R2)
-//   L1454  ===== MESAS
-//   L1465  ===== CANCHAS Y RESERVAS (antes sin backend: la pantalla se veía vacía sin avisar)
-//   L1524  ===== ÓRDENES
-//   L1669  ===== CAJA
-//   L1720  ===== TURNOS (mínimo 2 al día: matutino y vespertino)
-//   L1761  ===== ANULAR COBROS (clave del admin en turno + clave del sistema)
-//   L1904  ===== INVENTARIO (control manual de insumos)
-//   L1965  ===== Aún no implementados
+//   L579   ===== LOGIN (único endpoint sin sesión)
+//   L613   ===== Estado del negocio: prueba, activo o bloqueado
+//   L630   ===== Bloqueo: si el negocio ya no está activo, nada de /api/* funciona salvo lo de arriba
+//   L701   ===== Sesión obligatoria para todo lo demás
+//   L710   ===== NOTIFICACIONES PUSH: suscripción del celular/navegador
+//   L752   ===== PUBLICO (sin sesion): pagina de pedidos y tarjeta de lealtad
+//   L845   ===== Asistente de primera sesión: elegir módulos
+//   L857   ===== Panel de super-admin (solo para "rush", que opera la plataforma)
+//   L881   ===== USUARIOS (solo admin)
+//   L1002  ===== EQUIPO CON WHATSAPP (para avisos de comanda y "listo")
+//   L1012  ===== ADMIN EN TURNO: quién recibe los pedidos por WhatsApp
+//   L1046  ===== REPARTIDORES
+//   L1089  ===== CLIENTES (se arman con los datos de las órdenes)
+//   L1140  ===== MENÚ
+//   L1198  ===== FOTOS (R2)
+//   L1462  ===== MESAS
+//   L1473  ===== CANCHAS Y RESERVAS (antes sin backend: la pantalla se veía vacía sin avisar)
+//   L1532  ===== ÓRDENES
+//   L1677  ===== CAJA
+//   L1728  ===== TURNOS (mínimo 2 al día: matutino y vespertino)
+//   L1769  ===== ANULAR COBROS (clave del admin en turno + clave del sistema)
+//   L1912  ===== INVENTARIO (control manual de insumos)
+//   L1973  ===== Aún no implementados
 // ===== FOTOS: Google Drive → proxy con caché → Cloudflare R2 =====
 // Extrae el ID de cualquier link de Drive (uc?id=, /file/d/ID, open?id=, thumbnail?id=, lh3/d/ID)
 function driveId(u) {
@@ -206,6 +206,7 @@ const vapidPub = (env) => ({
   x: env.VAPID_PUBLIC_X || VAPID_DEFAULT.x,
   y: env.VAPID_PUBLIC_Y || VAPID_DEFAULT.y,
 });
+let PUSH_SUBJECT = ""; // se llena en cada petición con el dominio actual
 const b64uToBytes = (s) => {
   s = s.replace(/-/g, "+").replace(/_/g, "/");
   while (s.length % 4) s += "=";
@@ -224,11 +225,12 @@ async function vapidHeaders(env, endpoint) {
   const aud = url.origin;
   const header = { typ: "JWT", alg: "ES256" };
   const exp = Math.floor(Date.now() / 1000) + 12 * 3600;
-  const claims = { aud, exp, sub: "mailto:soporte@artmmx.workers.dev" };
+  // "sub" = contacto del servidor de notificaciones. Se usa la dirección real de este sitio (Apple valida que sea una URL o mailto: válida).
+  const claims = { aud, exp, sub: String(env.VAPID_SUBJECT || PUSH_SUBJECT || "https://artmmx.workers.dev") };
   const b64json = (o) => bytesToB64u(new TextEncoder().encode(JSON.stringify(o)));
   const unsigned = b64json(header) + "." + b64json(claims);
   const pub = vapidPub(env);
-  const jwk = { kty: "EC", crv: "P-256", d: env.VAPID_PRIVATE_KEY, x: pub.x, y: pub.y, ext: true };
+  const jwk = { kty: "EC", crv: "P-256", d: String(env.VAPID_PRIVATE_KEY || "").trim(), x: pub.x, y: pub.y, ext: true };
   const key = await crypto.subtle.importKey("jwk", jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
   const sigDer = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, new TextEncoder().encode(unsigned));
   // Web Crypto firma en formato "raw" (r||s, 64 bytes) para ECDSA — es justo lo que pide un JWT ES256, sin convertir de DER.
@@ -250,9 +252,9 @@ async function encryptPush(payloadObj, p256dhB64u, authB64u) {
     return new Uint8Array(bits);
   };
   const concat = (...arrs) => { const out = new Uint8Array(arrs.reduce((n, a) => n + a.length, 0)); let o = 0; for (const a of arrs) { out.set(a, o); o += a.length; } return out; };
-  const authInfo = concat(new TextEncoder().encode("WebPush: info\0"), clientPub, serverPubRaw);
-  const prk = await hkdf(authSecret, sharedSecret, new ArrayBuffer(0), 32);
-  const ikm = await hkdf(salt, prk, authInfo, 32);
+  // RFC 8291: IKM = HKDF(salt = auth_secret, ikm = ecdh_secret, info = "WebPush: info\0" || ua_public || as_public)
+  const keyInfo = concat(new TextEncoder().encode("WebPush: info\0"), clientPub, serverPubRaw);
+  const ikm = await hkdf(authSecret, sharedSecret, keyInfo, 32);
   const cekInfo = new TextEncoder().encode("Content-Encoding: aes128gcm\0");
   const nonceInfo = new TextEncoder().encode("Content-Encoding: nonce\0");
   const cek = await hkdf(salt, ikm, cekInfo, 16);
@@ -277,9 +279,12 @@ async function sendPush(env, sub, payloadObj) {
       headers: { ...auth, "Content-Type": "application/octet-stream", "Content-Encoding": "aes128gcm", TTL: "86400", Urgency: "high" },
       body,
     });
-    return { ok: r.status === 201 || r.status === 200 || r.status === 204, status: r.status, gone: r.status === 404 || r.status === 410 };
+    const ok = r.status === 201 || r.status === 200 || r.status === 204;
+    let detail = "";
+    if (!ok) { try { detail = (await r.text()).slice(0, 160); } catch (e) {} }
+    return { ok, status: r.status, detail, gone: r.status === 404 || r.status === 410 };
   } catch (e) {
-    return { ok: false, error: String(e) };
+    return { ok: false, error: String(e && e.message ? e.message : e) };
   }
 }
 let tenantColsReady = false;
@@ -296,6 +301,7 @@ async function ensureTenantCols(db) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    PUSH_SUBJECT = url.origin;
     const { slug: tenantSlug, rest: tenantPath } = splitTenant(url.pathname);
     let path = tenantPath; // el resto del código nunca ve el prefijo /t/<slug>
 
@@ -721,7 +727,9 @@ export default {
         const subs = (await db.prepare("SELECT * FROM pos_push_subs WHERE user_id=? AND tenant_id=?").bind(sess.user_id, tenantId).all()).results || [];
         if (!subs.length) return json({ error: "No tienes notificaciones activadas en este dispositivo" }, 400);
         const results = await Promise.all(subs.map((s) => sendPush(env, s, { title: "🔔 Notificaciones activadas", body: "Así te van a llegar los avisos de RUSH POS.", tag: "test" })));
-        return json({ sent: results.filter((r) => r.ok).length, total: results.length });
+        const bad = results.find((r) => !r.ok);
+        return json({ sent: results.filter((r) => r.ok).length, total: results.length,
+          reason: bad ? (bad.error ? "error: " + bad.error : "el servicio de notificaciones respondió " + bad.status + (bad.detail ? " (" + bad.detail + ")" : "")) : "" });
       }
       // Estrella manual del admin, con motivo, ligada a la cuenta por WhatsApp (crea la tarjeta si no existía)
       if (path === "/api/loyalty-manual-stamp" && request.method === "POST") {
