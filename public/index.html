@@ -1385,8 +1385,11 @@ async function enablePush(){
   }catch(e){ toast("No se pudo activar: "+e.message); }
 }
 async function testPush(){
-  try{ const r=await api("/push-test",{method:"POST",body:"{}"}); toast(r.sent?"🔊 Enviada. ¿Te sonó?":"No se pudo enviar. Intenta desactivar y activar de nuevo."); }
-  catch(e){ toast(e.message); }
+  try{
+    const r=await api("/push-test",{method:"POST",body:"{}"});
+    if(r.sent){ toast("🔊 Enviada. ¿Te sonó?"); refreshPushUI(); }
+    else{ toast("No se pudo enviar"); $("pushStatus").innerHTML="⚠️ <b>No se pudo enviar.</b> "+esc(r.reason||"Motivo desconocido")+"<br><span style='font-size:12px'>Mándale esta línea a quien te ayuda con el sistema.</span>"; }
+  }catch(e){ toast(e.message); }
 }
 async function disablePush(){
   try{
