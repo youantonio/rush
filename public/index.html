@@ -712,6 +712,8 @@ function showApp(){
   });
   $("nav").innerHTML=navHtml;
   view(nav[0][0], $("nav").firstElementChild);
+  // Cada vez que se abre la app, si ya dio permiso, se revisa que su suscripción siga vigente
+  setTimeout(()=>{ try{ if("serviceWorker" in navigator && "PushManager" in window && "Notification" in window && Notification.permission==="granted") navigator.serviceWorker.getRegistration().then(r=>{ if(r) syncPushSub(r); }); }catch(e){} },2500);
 }
 
 function view(id,btn){
@@ -1356,6 +1358,22 @@ let swReg=null;
 if("serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js").then(r=>{ swReg=r; }).catch(()=>{}); }
 const isIOS=/iphone|ipad|ipod/i.test(navigator.userAgent);
 const isStandalone=window.matchMedia("(display-mode: standalone)").matches || navigator.standalone===true;
+function u8ToB64u(u8){ let s=""; u8.forEach(b=>{ s+=String.fromCharCode(b); }); return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
+// Si la llave del servidor cambió, la suscripción vieja ya no sirve: se renueva sola (el permiso ya está dado, no vuelve a preguntar).
+async function syncPushSub(reg){
+  let sub = await reg.pushManager.getSubscription(); if(!sub) return null;
+  try{
+    const { key } = await api("/push-vapid-key");
+    const cur = sub.options && sub.options.applicationServerKey ? u8ToB64u(new Uint8Array(sub.options.applicationServerKey)) : null;
+    if(key && cur && cur!==key){
+      try{ await api("/push-unsubscribe",{method:"POST",body:JSON.stringify({endpoint:sub.endpoint})}); }catch(e){}
+      await sub.unsubscribe();
+      sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:b64uToUint8(key) });
+      await api("/push-subscribe",{method:"POST",body:JSON.stringify({subscription:sub.toJSON()})});
+    }
+  }catch(e){}
+  return sub;
+}
 function b64uToUint8(s){ s=s.replace(/-/g,"+").replace(/_/g,"/"); while(s.length%4) s+="="; const raw=atob(s); const out=new Uint8Array(raw.length); for(let i=0;i<raw.length;i++) out[i]=raw.charCodeAt(i); return out; }
 async function refreshPushUI(){
   if(!$("pushStatus")) return;
@@ -1365,7 +1383,7 @@ async function refreshPushUI(){
     $("pushOnBtn").classList.add("hidden");
   } else {
     const reg = swReg || await navigator.serviceWorker.getRegistration();
-    const sub = reg ? await reg.pushManager.getSubscription() : null;
+    const sub = reg ? await syncPushSub(reg) : null;
     if(Notification.permission==="denied"){ $("pushStatus").textContent="🚫 Las notificaciones están bloqueadas. Actívalas en los ajustes del navegador o del celular."; $("pushOnBtn").classList.add("hidden"); }
     else if(sub){ $("pushStatus").innerHTML="✅ <b>Activadas</b> en este dispositivo."; $("pushOnBtn").classList.add("hidden"); $("pushTestBtn").classList.remove("hidden"); $("pushOffBtn").classList.remove("hidden"); }
     else { $("pushStatus").textContent="Aún no están activadas en este dispositivo."; $("pushOnBtn").classList.remove("hidden"); $("pushTestBtn").classList.add("hidden"); $("pushOffBtn").classList.add("hidden"); }
@@ -1379,6 +1397,8 @@ async function enablePush(){
     const reg = swReg || await navigator.serviceWorker.ready;
     const { key } = await api("/push-vapid-key");
     if(!key) return toast("El servidor aún no tiene las llaves de notificaciones (ver README).");
+    const old = await reg.pushManager.getSubscription();
+    if(old){ try{ await api("/push-unsubscribe",{method:"POST",body:JSON.stringify({endpoint:old.endpoint})}); }catch(e){} await old.unsubscribe(); }
     const sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:b64uToUint8(key) });
     await api("/push-subscribe",{method:"POST",body:JSON.stringify({subscription:sub.toJSON()})});
     toast("🔔 Notificaciones activadas"); refreshPushUI();
@@ -1386,6 +1406,7 @@ async function enablePush(){
 }
 async function testPush(){
   try{
+    const reg = swReg || await navigator.serviceWorker.getRegistration(); if(reg) await syncPushSub(reg);
     const r=await api("/push-test",{method:"POST",body:"{}"});
     if(r.sent){ toast("🔊 Enviada. ¿Te sonó?"); refreshPushUI(); }
     else{ toast("No se pudo enviar"); $("pushStatus").innerHTML="⚠️ <b>No se pudo enviar.</b> "+esc(r.reason||"Motivo desconocido")+"<br><span style='font-size:12px'>Mándale esta línea a quien te ayuda con el sistema.</span>"; }
