@@ -22,3 +22,10 @@ database_id = "79ed43c7-40b8-4a8a-bec5-1fd69449774b"
 [[r2_buckets]]
 binding = "PHOTOS"
 bucket_name = "rush-fotos"
+
+# Notificaciones push (v38.0). Estas 3 son PÚBLICAS, pueden ir aquí sin problema.
+# La llave PRIVADA (VAPID_PRIVATE_KEY) NUNCA va en este archivo: se agrega como Secreto en Cloudflare.
+[vars]
+VAPID_PUBLIC_KEY = "BLkoFSgOu_8bFSJ90S5rP9zUr8b-zUiAhcBborsVa39t575g7aMCw3plKFafl9kAumXNCvoQvz4aM3Rg7Z9svlI"
+VAPID_PUBLIC_X = "uSgVKA67_xsVIn3RLms_3NSvxv7NSICFwFuiuxVrf20"
+VAPID_PUBLIC_Y = "575g7aMCw3plKFafl9kAumXNCvoQvz4aM3Rg7Z9svlI"
