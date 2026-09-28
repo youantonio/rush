@@ -2,30 +2,32 @@
 const ROLES = ["admin", "mesero", "cocina", "barra", "repartidor", "editor"];
 
 // ÍNDICE (se regenera con cada versión — no editar a mano; ver tests/README.md):
-//   L29    ===== FOTOS: Google Drive → proxy con caché → Cloudflare R2
-//   L164   ===== NEGOCIOS (multi-tenant): cada restaurante vive en /t/<slug>/…
-//   L445   ===== PUBLICO (sin sesion): pagina de pedidos y tarjeta de lealtad
-//   L559   ===== LOGIN (único endpoint sin sesión)
-//   L593   ===== Estado del negocio: prueba, activo o bloqueado
-//   L610   ===== Bloqueo: si el negocio ya no está activo, nada de /api/* funciona salvo lo de arriba
-//   L665   ===== Sesión obligatoria para todo lo demás
-//   L674   ===== Asistente de primera sesión: elegir módulos
-//   L686   ===== Panel de super-admin (solo para "rush", que opera la plataforma)
-//   L710   ===== USUARIOS (solo admin)
-//   L831   ===== EQUIPO CON WHATSAPP (para avisos de comanda y "listo")
-//   L841   ===== ADMIN EN TURNO: quién recibe los pedidos por WhatsApp
-//   L875   ===== REPARTIDORES
-//   L918   ===== CLIENTES (se arman con los datos de las órdenes)
-//   L968   ===== MENÚ
-//   L1026  ===== FOTOS (R2)
-//   L1290  ===== MESAS
-//   L1301  ===== CANCHAS Y RESERVAS (antes sin backend: la pantalla se veía vacía sin avisar)
-//   L1360  ===== ÓRDENES
-//   L1485  ===== CAJA
-//   L1536  ===== TURNOS (mínimo 2 al día: matutino y vespertino)
-//   L1577  ===== ANULAR COBROS (clave del admin en turno + clave del sistema)
-//   L1720  ===== INVENTARIO (control manual de insumos)
-//   L1781  ===== Aún no implementados
+//   L31    ===== FOTOS: Google Drive → proxy con caché → Cloudflare R2
+//   L166   ===== NEGOCIOS (multi-tenant): cada restaurante vive en /t/<slug>/…
+//   L194   ===== NOTIFICACIONES PUSH (protocolo Web Push: RFC 8291 cifrado + RFC 8292 VAPID)
+//   L573   ===== LOGIN (único endpoint sin sesión)
+//   L607   ===== Estado del negocio: prueba, activo o bloqueado
+//   L624   ===== Bloqueo: si el negocio ya no está activo, nada de /api/* funciona salvo lo de arriba
+//   L695   ===== Sesión obligatoria para todo lo demás
+//   L704   ===== NOTIFICACIONES PUSH: suscripción del celular/navegador
+//   L744   ===== PUBLICO (sin sesion): pagina de pedidos y tarjeta de lealtad
+//   L837   ===== Asistente de primera sesión: elegir módulos
+//   L849   ===== Panel de super-admin (solo para "rush", que opera la plataforma)
+//   L873   ===== USUARIOS (solo admin)
+//   L994   ===== EQUIPO CON WHATSAPP (para avisos de comanda y "listo")
+//   L1004  ===== ADMIN EN TURNO: quién recibe los pedidos por WhatsApp
+//   L1038  ===== REPARTIDORES
+//   L1081  ===== CLIENTES (se arman con los datos de las órdenes)
+//   L1132  ===== MENÚ
+//   L1190  ===== FOTOS (R2)
+//   L1454  ===== MESAS
+//   L1465  ===== CANCHAS Y RESERVAS (antes sin backend: la pantalla se veía vacía sin avisar)
+//   L1524  ===== ÓRDENES
+//   L1669  ===== CAJA
+//   L1720  ===== TURNOS (mínimo 2 al día: matutino y vespertino)
+//   L1761  ===== ANULAR COBROS (clave del admin en turno + clave del sistema)
+//   L1904  ===== INVENTARIO (control manual de insumos)
+//   L1965  ===== Aún no implementados
 // ===== FOTOS: Google Drive → proxy con caché → Cloudflare R2 =====
 // Extrae el ID de cualquier link de Drive (uc?id=, /file/d/ID, open?id=, thumbnail?id=, lh3/d/ID)
 function driveId(u) {
@@ -188,6 +190,98 @@ async function ensureTenantsSchema(db) {
 }
 let tenantsSchemaReady = false;
 let courtsSchemaReady = false;
+
+// ===== NOTIFICACIONES PUSH (protocolo Web Push: RFC 8291 cifrado + RFC 8292 VAPID) =====
+// No dependen de que alguien toque "enviar": el servidor las manda solo, en el momento del evento.
+// Llaves PÚBLICAS: no son secretas (el navegador las recibe de todos modos), así que viven aquí y ya no dependen
+// de variables del Worker. Solo la PRIVADA (VAPID_PRIVATE_KEY) es un Secreto en Cloudflare.
+// Si algún día cambias de llaves, puedes definir VAPID_PUBLIC_KEY / _X / _Y como variables y esas tienen prioridad.
+const VAPID_DEFAULT = {
+  key: "BLkoFSgOu_8bFSJ90S5rP9zUr8b-zUiAhcBborsVa39t575g7aMCw3plKFafl9kAumXNCvoQvz4aM3Rg7Z9svlI",
+  x: "uSgVKA67_xsVIn3RLms_3NSvxv7NSICFwFuiuxVrf20",
+  y: "575g7aMCw3plKFafl9kAumXNCvoQvz4aM3Rg7Z9svlI",
+};
+const vapidPub = (env) => ({
+  key: env.VAPID_PUBLIC_KEY || VAPID_DEFAULT.key,
+  x: env.VAPID_PUBLIC_X || VAPID_DEFAULT.x,
+  y: env.VAPID_PUBLIC_Y || VAPID_DEFAULT.y,
+});
+const b64uToBytes = (s) => {
+  s = s.replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4) s += "=";
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+};
+const bytesToB64u = (b) => {
+  let bin = ""; const arr = new Uint8Array(b);
+  for (let i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+};
+async function vapidHeaders(env, endpoint) {
+  const url = new URL(endpoint);
+  const aud = url.origin;
+  const header = { typ: "JWT", alg: "ES256" };
+  const exp = Math.floor(Date.now() / 1000) + 12 * 3600;
+  const claims = { aud, exp, sub: "mailto:soporte@artmmx.workers.dev" };
+  const b64json = (o) => bytesToB64u(new TextEncoder().encode(JSON.stringify(o)));
+  const unsigned = b64json(header) + "." + b64json(claims);
+  const pub = vapidPub(env);
+  const jwk = { kty: "EC", crv: "P-256", d: env.VAPID_PRIVATE_KEY, x: pub.x, y: pub.y, ext: true };
+  const key = await crypto.subtle.importKey("jwk", jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+  const sigDer = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, new TextEncoder().encode(unsigned));
+  // Web Crypto firma en formato "raw" (r||s, 64 bytes) para ECDSA — es justo lo que pide un JWT ES256, sin convertir de DER.
+  const jwt = unsigned + "." + bytesToB64u(sigDer);
+  return { Authorization: `vapid t=${jwt}, k=${pub.key}` };
+}
+// Cifra el mensaje según RFC 8291 (aes128gcm) usando la llave pública del navegador (p256dh) y su secreto (auth).
+async function encryptPush(payloadObj, p256dhB64u, authB64u) {
+  const payload = new TextEncoder().encode(JSON.stringify(payloadObj));
+  const clientPub = b64uToBytes(p256dhB64u), authSecret = b64uToBytes(authB64u);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const serverKeys = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const serverPubRaw = new Uint8Array(await crypto.subtle.exportKey("raw", serverKeys.publicKey));
+  const clientKey = await crypto.subtle.importKey("raw", clientPub, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const sharedSecret = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: clientKey }, serverKeys.privateKey, 256));
+  const hkdf = async (salt, ikm, info, len) => {
+    const key = await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
+    const bits = await crypto.subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt, info }, key, len * 8);
+    return new Uint8Array(bits);
+  };
+  const concat = (...arrs) => { const out = new Uint8Array(arrs.reduce((n, a) => n + a.length, 0)); let o = 0; for (const a of arrs) { out.set(a, o); o += a.length; } return out; };
+  const authInfo = concat(new TextEncoder().encode("WebPush: info\0"), clientPub, serverPubRaw);
+  const prk = await hkdf(authSecret, sharedSecret, new ArrayBuffer(0), 32);
+  const ikm = await hkdf(salt, prk, authInfo, 32);
+  const cekInfo = new TextEncoder().encode("Content-Encoding: aes128gcm\0");
+  const nonceInfo = new TextEncoder().encode("Content-Encoding: nonce\0");
+  const cek = await hkdf(salt, ikm, cekInfo, 16);
+  const nonce = await hkdf(salt, ikm, nonceInfo, 12);
+  const aesKey = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["encrypt"]);
+  const padded = concat(payload, new Uint8Array([2])); // delimitador de registro final (sin relleno extra)
+  const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, aesKey, padded));
+  // Encabezado aes128gcm: salt(16) + record size(4, big-endian) + longitud de llave(1) + llave pública del servidor(65)
+  const header = new Uint8Array(16 + 4 + 1 + 65);
+  header.set(salt, 0);
+  new DataView(header.buffer).setUint32(16, 4096, false);
+  header[20] = 65;
+  header.set(serverPubRaw, 21);
+  return concat(header, cipher);
+}
+async function sendPush(env, sub, payloadObj) {
+  try {
+    const body = await encryptPush(payloadObj, sub.p256dh, sub.auth);
+    const auth = await vapidHeaders(env, sub.endpoint);
+    const r = await fetch(sub.endpoint, {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "application/octet-stream", "Content-Encoding": "aes128gcm", TTL: "86400", Urgency: "high" },
+      body,
+    });
+    return { ok: r.status === 201 || r.status === 200 || r.status === 204, status: r.status, gone: r.status === 404 || r.status === 410 };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
 let tenantColsReady = false;
 // Todo lo existente queda marcado del negocio "rush" (no cambia nada para The Rush).
 // Se corre AL FINAL, cuando ya existen todas las tablas pos_* (algunas se crean más abajo).
@@ -253,7 +347,7 @@ export default {
         await db.prepare(
           `CREATE TABLE IF NOT EXISTS pos_loyalty_events (
              id TEXT PRIMARY KEY, phone TEXT, name TEXT, type TEXT, tenant_id TEXT DEFAULT 'rush',
-             created_at TEXT DEFAULT (datetime('now')))`
+             created_at TEXT DEFAULT (datetime('now')), reason TEXT, done_by TEXT)`
         ).run();
         await db.prepare(
           `CREATE TABLE IF NOT EXISTS pos_voids (
@@ -323,6 +417,11 @@ export default {
         try { await db.prepare("ALTER TABLE orders ADD COLUMN receiver_name TEXT").run(); } catch (e) {}
         await db.prepare(`CREATE TABLE IF NOT EXISTS pos_driver_locations (driver_id TEXT PRIMARY KEY, lat REAL, lng REAL, updated_at TEXT)`).run();
         await db.prepare(
+          `CREATE TABLE IF NOT EXISTS pos_push_subs (
+             id TEXT PRIMARY KEY, user_id TEXT NOT NULL, tenant_id TEXT DEFAULT 'rush', endpoint TEXT NOT NULL,
+             p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')))`
+        ).run();
+        await db.prepare(
           `CREATE TABLE IF NOT EXISTS pos_cash_movements (
              id TEXT PRIMARY KEY, type TEXT NOT NULL, concept TEXT NOT NULL, amount REAL NOT NULL,
              created_by TEXT, created_at TEXT DEFAULT (datetime('now')))`
@@ -376,6 +475,23 @@ export default {
         ? db.prepare("INSERT INTO pos_settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(k, String(v ?? "")).run()
         : db.prepare("INSERT INTO tenant_settings (tenant_id,key,value) VALUES (?,?,?) ON CONFLICT(tenant_id,key) DO UPDATE SET value=excluded.value").bind(tenantId, k, String(v ?? "")).run();
       // WhatsApp que recibe los pedidos: el del admin en turno; si no hay, el número general de respaldo
+      const roleUserIds = async (...roles) => {
+        const q = roles.map(() => "?").join(",");
+        const rows = (await db.prepare(`SELECT id FROM users WHERE tenant_id=? AND active=1 AND role IN (${q})`).bind(tenantId, ...roles).all()).results || [];
+        return rows.map((r) => r.id);
+      };
+      // Manda un push a cada persona indicada (por id de usuario) que tenga notificaciones activadas en este negocio.
+      // No requiere que nadie toque nada — a diferencia de WhatsApp, esto sí sale solo.
+      const notifyUsers = async (userIds, payload) => {
+        if (!env.VAPID_PRIVATE_KEY || !userIds.length) return;
+        const q = userIds.map(() => "?").join(",");
+        const subs = (await db.prepare(`SELECT * FROM pos_push_subs WHERE tenant_id=? AND user_id IN (${q})`).bind(tenantId, ...userIds).all()).results || [];
+        for (const s of subs) {
+          const r = await sendPush(env, s, payload);
+          if (r.gone) await db.prepare("DELETE FROM pos_push_subs WHERE id=?").bind(s.id).run().catch(() => {});
+        }
+      };
+
       const resolveOrderWa = async (st) => {
         const clean = (v) => String(v || "").replace(/\D/g, "").slice(-10);
         if (st.whatsapp_on_duty) {
@@ -425,7 +541,7 @@ export default {
       const genToken = () => crypto.randomUUID().replace(/-/g, "");
       // Lealtad: el mismo teléfono en dos negocios distintos guarda dos tarjetas separadas
       const lk = (ph) => (tenantId === "rush" ? ph : tenantId + ":" + ph);
-      const addStamp = async (phone, name) => {
+      const addStamp = async (phone, name, meta) => {
         const goal = Number((await getSettings()).loyalty_goal) || 10;
         let row = await db.prepare("SELECT * FROM pos_loyalty WHERE phone=?").bind(lk(phone)).first();
         if (!row) {
@@ -437,113 +553,11 @@ export default {
         if (stamps >= goal) { stamps = 0; earned += 1; justEarned = true; }
         await db.prepare("UPDATE pos_loyalty SET stamps=?, rewards_earned=?, name=?, updated_at=datetime('now') WHERE phone=?")
           .bind(stamps, earned, name || row.name, lk(phone)).run();
-        await db.prepare("INSERT INTO pos_loyalty_events (id,phone,name,type,tenant_id) VALUES (?,?,?,?,?)")
-          .bind(crypto.randomUUID(), lk(phone), name || row.name, justEarned ? "reward" : "stamp", tenantId).run();
-        return { token: row.card_token, stamps, goal, justEarned };
+        const evType = justEarned ? "reward" : (meta?.type || "stamp");
+        await db.prepare("INSERT INTO pos_loyalty_events (id,phone,name,type,tenant_id,reason,done_by) VALUES (?,?,?,?,?,?,?)")
+          .bind(crypto.randomUUID(), lk(phone), name || row.name, evType, tenantId, meta?.reason || null, meta?.by || null).run();
+        return { token: row.card_token, stamps, goal, justEarned, wasNew: !row.stamps && !row.rewards_earned && stamps === 1 };
       };
-
-      // ===== PUBLICO (sin sesion): pagina de pedidos y tarjeta de lealtad =====
-      if (path === "/api/public-settings" && request.method === "GET") {
-        const st = await getSettings();
-        const wa = await resolveOrderWa(st);
-        return json({
-          business_name: st.business_name, whatsapp_order_number: wa.number,
-          rappi_link: st.rappi_link, uber_link: st.uber_link,
-          loyalty_goal: Number(st.loyalty_goal) || 10, loyalty_reward: st.loyalty_reward,
-          menu_tagline: st.menu_tagline || "", business_hours: st.business_hours || "",
-          show_photos: st.show_photos !== "0",
-          google_reviews_link: st.google_reviews_link || "", instagram_link: st.instagram_link || "",
-          facebook_link: st.facebook_link || "", wifi_network: st.wifi_network || "", wifi_password: st.wifi_password || "",
-          promo_link: st.promo_link || "", hub_tagline: st.hub_tagline || "",
-          hub_extra_links: (() => { try { return JSON.parse(st.hub_extra_links || "[]"); } catch (e) { return []; } })(),
-        });
-      }
-      if (path === "/api/public-menu" && request.method === "GET") {
-        const its = ((await db.prepare("SELECT id,name,category,category_id,price,description,destination,image FROM menu_items WHERE active=1 AND sold_out=0 AND tenant_id=? ORDER BY sort_order, name").bind(tenantId).all()).results) || [];
-        const secs = ((await db.prepare("SELECT * FROM pos_menu_sections WHERE tenant_id=? ORDER BY sort_order, name").bind(tenantId).all()).results) || [];
-        const cats = ((await db.prepare("SELECT * FROM pos_menu_categories WHERE tenant_id=? ORDER BY sort_order, name").bind(tenantId).all()).results) || [];
-        return json({ items: its.map((i) => ({ ...i, image: imgOut(i.image) })), structure: secs.map((sc) => ({ ...sc, categories: cats.filter((c) => c.section_id === sc.id) })) });
-      }
-      if (path === "/api/public-order" && request.method === "POST") {
-        const b = await request.json().catch(() => ({}));
-        const items0 = b.items || [];
-        if (!items0.length) return json({ error: "El carrito esta vacio" }, 400);
-        const soldOut = await soldOutNames(items0);
-        if (soldOut.length) return json({ error: "Agotado: " + soldOut.join(", ") }, 409);
-        let phone = String(b.customer_phone || "").replace(/\D/g, ""); if (phone.length > 10) phone = phone.slice(-10);
-        if (phone.length !== 10) return json({ error: "WhatsApp a 10 digitos" }, 400);
-        const name = String(b.customer_name || "Cliente").trim() || "Cliente";
-        const channel = ["restaurante", "domicilio_directo"].includes(b.channel) ? b.channel : "restaurante";
-        // Precios SIEMPRE desde la base de datos (nunca confiar en el precio que manda el navegador)
-        const reqIds = [...new Set(items0.map((i) => String(i.menu_item_id || "")).filter(Boolean))].slice(0, 80);
-        if (!reqIds.length) return json({ error: "Productos no válidos" }, 400);
-        const dbItems = ((await db.prepare(`SELECT id, name, price, destination FROM menu_items WHERE active=1 AND tenant_id=? AND id IN (${reqIds.map(() => "?").join(",")})`)
-          .bind(tenantId, ...reqIds).all()).results) || [];
-        const byId = Object.fromEntries(dbItems.map((r) => [String(r.id), r]));
-        const missing = items0.filter((i) => !byId[String(i.menu_item_id)]);
-        if (missing.length) return json({ error: "Ya no está disponible: " + missing.map((i) => i.name || "producto").join(", ") + ". Recarga el menú." }, 409);
-        const itemsSafe = items0.slice(0, 80).map((i) => {
-          const r = byId[String(i.menu_item_id)];
-          return { menu_item_id: String(r.id), name: r.name, qty: Math.min(99, Math.max(1, Math.floor(Number(i.qty) || 1))),
-                   unit_price: Number(r.price) || 0, destination: r.destination || "cocina", ...(i.note ? { note: String(i.note).slice(0, 140) } : {}) };
-        });
-        const tableTxt = String(b.table || "").trim().slice(0, 40);
-        let shipping = 0, dLat = null, dLng = null, addrText = "";
-        if (channel === "domicilio_directo") {
-          const a = b.address || {};
-          addrText = [a.street, a.number, a.neighborhood, a.reference].filter(Boolean).join(", ");
-          if (!a.street || !a.number || !a.neighborhood) return json({ error: "Falta calle, número o colonia" }, 400);
-          if (!String(b.receiver_name || "").trim()) return json({ error: "Falta el nombre de quien recibe" }, 400);
-          if (isFinite(Number(a.lat)) && isFinite(Number(a.lng))) {
-            dLat = Number(a.lat); dLng = Number(a.lng);
-            const st = await getSettings();
-            const km = haversineKm(Number(st.business_lat) || 20.101, Number(st.business_lng) || -98.7591, dLat, dLng);
-            shipping = Math.round((Number(st.delivery_base_fee) || 0) + km * (Number(st.delivery_rate_km) || 0));
-          }
-        }
-        const notes = JSON.stringify({
-          type: channel === "domicilio_directo" ? "Domicilio (directo)" : ("Restaurante" + (tableTxt ? " · " + tableTxt : "")),
-          cocina: String(b.notes || "").trim().slice(0, 300), barra: String(b.notes_barra || "").trim().slice(0, 300),
-        });
-        const total = calcTotal(itemsSafe) + shipping;
-        const id = crypto.randomUUID(), trackToken = crypto.randomUUID().replace(/-/g, "");
-        // Hora de México (UTC-6, sin horario de verano) + 2 letras al azar para que no se repita el folio en el mismo minuto
-        const dd = new Date(Date.now() - 6 * 3600 * 1000), p2b = (n) => String(n).padStart(2, "0");
-        const folio = "WEB-" + p2b(dd.getUTCDate()) + p2b(dd.getUTCMonth() + 1) + "-" + p2b(dd.getUTCHours()) + p2b(dd.getUTCMinutes())
-          + "-" + trackToken.slice(0, 2).toUpperCase();
-        await db.prepare(
-          `INSERT INTO orders (id, custom_folio, customer_name, customer_phone, notes, items, subtotal, total, channel,
-             loyalty_consent, delivery_status, delivery_lat, delivery_lng, shipping_cost, tracking_token, delivery_address, receiver_name, created_at, updated_at, tenant_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'),datetime('now'),?)`
-        ).bind(id, folio, name, phone, notes, JSON.stringify(itemsSafe), calcTotal(itemsSafe), total, channel, b.loyalty_consent ? 1 : 0,
-               channel === "domicilio_directo" ? "recibido" : null, dLat, dLng, shipping, trackToken, addrText, String(b.receiver_name || "").trim(), tenantId).run();
-        const waTo = await resolveOrderWa(await getSettings());
-        // Tarjeta de lealtad: se crea (sin sello) para que el cliente tenga su link desde ya; el sello se suma al cobrar
-        let cardToken = null;
-        if (b.loyalty_consent) {
-          const row = await db.prepare("SELECT card_token FROM pos_loyalty WHERE phone=?").bind(lk(phone)).first();
-          if (row) cardToken = row.card_token;
-          else {
-            cardToken = genToken();
-            await db.prepare("INSERT INTO pos_loyalty (phone,name,card_token,stamps,consent,tenant_id) VALUES (?,?,?,0,1,?)").bind(lk(phone), name, cardToken, tenantId).run();
-          }
-        }
-        return json({ id, folio, shipping, total, track_token: trackToken, whatsapp_to: waTo.number, card_token: cardToken }, 201);
-      }
-      if (path === "/api/loyalty-join" && request.method === "POST") {
-        const b = await request.json().catch(() => ({}));
-        let phone = String(b.phone || "").replace(/\D/g, ""); if (phone.length > 10) phone = phone.slice(-10);
-        if (phone.length !== 10) return json({ error: "Tu WhatsApp debe tener 10 dígitos" }, 400);
-        const name = String(b.name || "Cliente").trim().slice(0, 60) || "Cliente";
-        let row = await db.prepare("SELECT card_token FROM pos_loyalty WHERE phone=?").bind(lk(phone)).first();
-        let cardToken;
-        if (row) cardToken = row.card_token;
-        else {
-          cardToken = genToken();
-          await db.prepare("INSERT INTO pos_loyalty (phone,name,card_token,stamps,consent,tenant_id) VALUES (?,?,?,0,1,?)").bind(lk(phone), name, cardToken, tenantId).run();
-        }
-        return json({ card_token: cardToken }, 201);
-      }
       if (path === "/api/loyalty-card" && request.method === "GET") {
         const token = url.searchParams.get("token") || "";
         const row = token ? await db.prepare("SELECT * FROM pos_loyalty WHERE card_token=?").bind(token).first() : null;
@@ -662,6 +676,22 @@ export default {
         return json({ token, user: { id: user.id, name: user.name, username: user.username, role: user.role }, tenant: { slug: tenant.slug, name: tenant.name, modules: tenantModules } });
       }
 
+      if (path === "/api/loyalty-join" && request.method === "POST") {
+        const b = await request.json().catch(() => ({}));
+        let phone = String(b.phone || "").replace(/\D/g, ""); if (phone.length > 10) phone = phone.slice(-10);
+        if (phone.length !== 10) return json({ error: "Tu WhatsApp debe tener 10 dígitos" }, 400);
+        const name = String(b.name || "Cliente").trim().slice(0, 60) || "Cliente";
+        let row = await db.prepare("SELECT card_token FROM pos_loyalty WHERE phone=?").bind(lk(phone)).first();
+        let cardToken;
+        if (row) cardToken = row.card_token;
+        else {
+          cardToken = genToken();
+          await db.prepare("INSERT INTO pos_loyalty (phone,name,card_token,stamps,consent,tenant_id) VALUES (?,?,?,0,1,?)").bind(lk(phone), name, cardToken, tenantId).run();
+        }
+        return json({ card_token: cardToken }, 201);
+      }
+
+
       // ===== Sesión obligatoria para todo lo demás =====
       const auth = request.headers.get("Authorization") || "";
       const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
@@ -671,6 +701,139 @@ export default {
       if (!sess) return json({ error: "Sesión expirada. Inicia sesión de nuevo." }, 401);
       const isAdmin = sess.role === "admin";
 
+      // ===== NOTIFICACIONES PUSH: suscripción del celular/navegador =====
+      if (path === "/api/push-vapid-key" && request.method === "GET") return json({ key: vapidPub(env).key });
+      if (path === "/api/push-subscribe" && request.method === "POST") {
+        const b = await request.json().catch(() => ({}));
+        const sub = b.subscription;
+        if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth) return json({ error: "Suscripción inválida" }, 400);
+        await db.prepare("DELETE FROM pos_push_subs WHERE endpoint=?").bind(sub.endpoint).run();
+        await db.prepare("INSERT INTO pos_push_subs (id,user_id,tenant_id,endpoint,p256dh,auth) VALUES (?,?,?,?,?,?)")
+          .bind(crypto.randomUUID(), sess.user_id, tenantId, sub.endpoint, sub.keys.p256dh, sub.keys.auth).run();
+        return json({ ok: true });
+      }
+      if (path === "/api/push-unsubscribe" && request.method === "POST") {
+        const b = await request.json().catch(() => ({}));
+        if (b.endpoint) await db.prepare("DELETE FROM pos_push_subs WHERE endpoint=? AND tenant_id=?").bind(b.endpoint, tenantId).run();
+        return json({ ok: true });
+      }
+      if (path === "/api/push-test" && request.method === "POST") {
+        const subs = (await db.prepare("SELECT * FROM pos_push_subs WHERE user_id=? AND tenant_id=?").bind(sess.user_id, tenantId).all()).results || [];
+        if (!subs.length) return json({ error: "No tienes notificaciones activadas en este dispositivo" }, 400);
+        const results = await Promise.all(subs.map((s) => sendPush(env, s, { title: "🔔 Notificaciones activadas", body: "Así te van a llegar los avisos de RUSH POS.", tag: "test" })));
+        return json({ sent: results.filter((r) => r.ok).length, total: results.length });
+      }
+      // Estrella manual del admin, con motivo, ligada a la cuenta por WhatsApp (crea la tarjeta si no existía)
+      if (path === "/api/loyalty-manual-stamp" && request.method === "POST") {
+        if (!isAdmin) return json({ error: "Solo el administrador puede agregar estrellas manuales" }, 403);
+        const b = await request.json().catch(() => ({}));
+        const phone = String(b.phone || "").replace(/\D/g, "").slice(-10);
+        const reason = String(b.reason || "").trim().slice(0, 200);
+        const qty = Math.min(10, Math.max(1, Number(b.qty) || 1));
+        if (phone.length !== 10) return json({ error: "El WhatsApp debe tener 10 dígitos" }, 400);
+        if (!reason) return json({ error: "Escribe el motivo de la estrella" }, 400);
+        const existing = await db.prepare("SELECT name FROM pos_loyalty WHERE phone=?").bind(lk(phone)).first();
+        const name = String(b.name || existing?.name || "Cliente").trim() || "Cliente";
+        const me2 = await db.prepare("SELECT name FROM users WHERE id=?").bind(sess.user_id).first().catch(() => null);
+        const by = (me2 && me2.name) || sess.username || "Admin";
+        let last = null;
+        for (let i = 0; i < qty; i++) last = await addStamp(phone, name, { type: "stamp_manual", reason, by });
+        return json({ ...last, linked_existing: !!existing });
+      }
+
+      // ===== PUBLICO (sin sesion): pagina de pedidos y tarjeta de lealtad =====
+      if (path === "/api/public-settings" && request.method === "GET") {
+        const st = await getSettings();
+        const wa = await resolveOrderWa(st);
+        return json({
+          business_name: st.business_name, whatsapp_order_number: wa.number,
+          rappi_link: st.rappi_link, uber_link: st.uber_link,
+          loyalty_goal: Number(st.loyalty_goal) || 10, loyalty_reward: st.loyalty_reward,
+          menu_tagline: st.menu_tagline || "", business_hours: st.business_hours || "",
+          show_photos: st.show_photos !== "0",
+          google_reviews_link: st.google_reviews_link || "", instagram_link: st.instagram_link || "",
+          facebook_link: st.facebook_link || "", wifi_network: st.wifi_network || "", wifi_password: st.wifi_password || "",
+          promo_link: st.promo_link || "", hub_tagline: st.hub_tagline || "",
+          hub_extra_links: (() => { try { return JSON.parse(st.hub_extra_links || "[]"); } catch (e) { return []; } })(),
+        });
+      }
+      if (path === "/api/public-menu" && request.method === "GET") {
+        const its = ((await db.prepare("SELECT id,name,category,category_id,price,description,destination,image FROM menu_items WHERE active=1 AND sold_out=0 AND tenant_id=? ORDER BY sort_order, name").bind(tenantId).all()).results) || [];
+        const secs = ((await db.prepare("SELECT * FROM pos_menu_sections WHERE tenant_id=? ORDER BY sort_order, name").bind(tenantId).all()).results) || [];
+        const cats = ((await db.prepare("SELECT * FROM pos_menu_categories WHERE tenant_id=? ORDER BY sort_order, name").bind(tenantId).all()).results) || [];
+        return json({ items: its.map((i) => ({ ...i, image: imgOut(i.image) })), structure: secs.map((sc) => ({ ...sc, categories: cats.filter((c) => c.section_id === sc.id) })) });
+      }
+      if (path === "/api/public-order" && request.method === "POST") {
+        const b = await request.json().catch(() => ({}));
+        const items0 = b.items || [];
+        if (!items0.length) return json({ error: "El carrito esta vacio" }, 400);
+        const soldOut = await soldOutNames(items0);
+        if (soldOut.length) return json({ error: "Agotado: " + soldOut.join(", ") }, 409);
+        let phone = String(b.customer_phone || "").replace(/\D/g, ""); if (phone.length > 10) phone = phone.slice(-10);
+        if (phone.length !== 10) return json({ error: "WhatsApp a 10 digitos" }, 400);
+        const name = String(b.customer_name || "Cliente").trim() || "Cliente";
+        const channel = ["restaurante", "domicilio_directo"].includes(b.channel) ? b.channel : "restaurante";
+        // Precios SIEMPRE desde la base de datos (nunca confiar en el precio que manda el navegador)
+        const reqIds = [...new Set(items0.map((i) => String(i.menu_item_id || "")).filter(Boolean))].slice(0, 80);
+        if (!reqIds.length) return json({ error: "Productos no válidos" }, 400);
+        const dbItems = ((await db.prepare(`SELECT id, name, price, destination FROM menu_items WHERE active=1 AND tenant_id=? AND id IN (${reqIds.map(() => "?").join(",")})`)
+          .bind(tenantId, ...reqIds).all()).results) || [];
+        const byId = Object.fromEntries(dbItems.map((r) => [String(r.id), r]));
+        const missing = items0.filter((i) => !byId[String(i.menu_item_id)]);
+        if (missing.length) return json({ error: "Ya no está disponible: " + missing.map((i) => i.name || "producto").join(", ") + ". Recarga el menú." }, 409);
+        const itemsSafe = items0.slice(0, 80).map((i) => {
+          const r = byId[String(i.menu_item_id)];
+          return { menu_item_id: String(r.id), name: r.name, qty: Math.min(99, Math.max(1, Math.floor(Number(i.qty) || 1))),
+                   unit_price: Number(r.price) || 0, destination: r.destination || "cocina", ...(i.note ? { note: String(i.note).slice(0, 140) } : {}) };
+        });
+        const tableTxt = String(b.table || "").trim().slice(0, 40);
+        let shipping = 0, dLat = null, dLng = null, addrText = "";
+        if (channel === "domicilio_directo") {
+          const a = b.address || {};
+          addrText = [a.street, a.number, a.neighborhood, a.reference].filter(Boolean).join(", ");
+          if (!a.street || !a.number || !a.neighborhood) return json({ error: "Falta calle, número o colonia" }, 400);
+          if (!String(b.receiver_name || "").trim()) return json({ error: "Falta el nombre de quien recibe" }, 400);
+          if (isFinite(Number(a.lat)) && isFinite(Number(a.lng))) {
+            dLat = Number(a.lat); dLng = Number(a.lng);
+            const st = await getSettings();
+            const km = haversineKm(Number(st.business_lat) || 20.101, Number(st.business_lng) || -98.7591, dLat, dLng);
+            shipping = Math.round((Number(st.delivery_base_fee) || 0) + km * (Number(st.delivery_rate_km) || 0));
+          }
+        }
+        const notes = JSON.stringify({
+          type: channel === "domicilio_directo" ? "Domicilio (directo)" : ("Restaurante" + (tableTxt ? " · " + tableTxt : "")),
+          cocina: String(b.notes || "").trim().slice(0, 300), barra: String(b.notes_barra || "").trim().slice(0, 300),
+        });
+        const total = calcTotal(itemsSafe) + shipping;
+        const id = crypto.randomUUID(), trackToken = crypto.randomUUID().replace(/-/g, "");
+        // Hora de México (UTC-6, sin horario de verano) + 2 letras al azar para que no se repita el folio en el mismo minuto
+        const dd = new Date(Date.now() - 6 * 3600 * 1000), p2b = (n) => String(n).padStart(2, "0");
+        const folio = "WEB-" + p2b(dd.getUTCDate()) + p2b(dd.getUTCMonth() + 1) + "-" + p2b(dd.getUTCHours()) + p2b(dd.getUTCMinutes())
+          + "-" + trackToken.slice(0, 2).toUpperCase();
+        await db.prepare(
+          `INSERT INTO orders (id, custom_folio, customer_name, customer_phone, notes, items, subtotal, total, channel,
+             loyalty_consent, delivery_status, delivery_lat, delivery_lng, shipping_cost, tracking_token, delivery_address, receiver_name, created_at, updated_at, tenant_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'),datetime('now'),?)`
+        ).bind(id, folio, name, phone, notes, JSON.stringify(itemsSafe), calcTotal(itemsSafe), total, channel, b.loyalty_consent ? 1 : 0,
+               channel === "domicilio_directo" ? "recibido" : null, dLat, dLng, shipping, trackToken, addrText, String(b.receiver_name || "").trim(), tenantId).run();
+        const waTo = await resolveOrderWa(await getSettings());
+        // Tarjeta de lealtad: se crea (sin estrellas) para que el cliente tenga su link desde ya; la estrella se suma al cobrar
+        let cardToken = null;
+        if (b.loyalty_consent) {
+          const row = await db.prepare("SELECT card_token FROM pos_loyalty WHERE phone=?").bind(lk(phone)).first();
+          if (row) cardToken = row.card_token;
+          else {
+            cardToken = genToken();
+            await db.prepare("INSERT INTO pos_loyalty (phone,name,card_token,stamps,consent,tenant_id) VALUES (?,?,?,0,1,?)").bind(lk(phone), name, cardToken, tenantId).run();
+          }
+        }
+        ctx.waitUntil((async () => {
+          const coc = itemsSafe.some((i) => (i.destination || "cocina") === "cocina"), bar = itemsSafe.some((i) => i.destination === "barra");
+          const ids = new Set([...(await roleUserIds("admin")), ...(coc ? await roleUserIds("cocina") : []), ...(bar ? await roleUserIds("barra") : [])]);
+          await notifyUsers([...ids], { title: "🌐 Pedido en línea #" + folio, body: name + " · $" + total, tag: "order-" + id });
+        })());
+        return json({ id, folio, shipping, total, track_token: trackToken, whatsapp_to: waTo.number, card_token: cardToken }, 201);
+      }
       // ===== Asistente de primera sesión: elegir módulos =====
       if (path === "/api/onboarding" && request.method === "POST") {
         if (!isAdmin) return json({ error: "Solo el administrador configura el negocio" }, 403);
@@ -922,23 +1085,24 @@ export default {
         const todayRows = (await db.prepare(
           "SELECT type, COUNT(*) c FROM pos_loyalty_events WHERE tenant_id=? AND created_at > ? GROUP BY type"
         ).bind(tenantId, dayStart).all()).results || [];
-        const stampsToday = todayRows.find((r) => r.type === "stamp")?.c || 0;
+        const stampsToday = todayRows.filter((r) => r.type === "stamp" || r.type === "stamp_manual").reduce((s, r) => s + r.c, 0);
+        const manualToday = todayRows.find((r) => r.type === "stamp_manual")?.c || 0;
         const rewardsToday = todayRows.find((r) => r.type === "reward")?.c || 0;
         const totals = await db.prepare(
           "SELECT COUNT(*) wallets, COALESCE(SUM(stamps),0) stamps_now, COALESCE(SUM(rewards_earned),0) rewards_earned, COALESCE(SUM(rewards_redeemed),0) rewards_redeemed FROM pos_loyalty WHERE tenant_id=? AND consent=1"
         ).bind(tenantId).first();
         const allTime = await db.prepare(
-          "SELECT SUM(CASE WHEN type='stamp' THEN 1 ELSE 0 END) stamps, SUM(CASE WHEN type='reward' THEN 1 ELSE 0 END) rewards FROM pos_loyalty_events WHERE tenant_id=?"
+          "SELECT SUM(CASE WHEN type IN ('stamp','stamp_manual') THEN 1 ELSE 0 END) stamps, SUM(CASE WHEN type='reward' THEN 1 ELSE 0 END) rewards FROM pos_loyalty_events WHERE tenant_id=?"
         ).bind(tenantId).first();
         const returning = await db.prepare(
           "SELECT COUNT(*) c FROM pos_loyalty WHERE tenant_id=? AND consent=1 AND stamps + rewards_earned + rewards_redeemed >= 2"
         ).bind(tenantId).first();
         const feed = (await db.prepare(
-          "SELECT name, type, created_at FROM pos_loyalty_events WHERE tenant_id=? ORDER BY created_at DESC LIMIT 10"
+          "SELECT name, type, reason, done_by, created_at FROM pos_loyalty_events WHERE tenant_id=? ORDER BY created_at DESC LIMIT 10"
         ).bind(tenantId).all()).results || [];
         const st = await getSettings();
         return json({
-          stamps_today: stampsToday, rewards_today: rewardsToday,
+          stamps_today: stampsToday, rewards_today: rewardsToday, manual_stamps_today: manualToday,
           active_wallets: totals?.wallets || 0,
           returning_customers: returning?.c || 0,
           all_time_stamps: allTime?.stamps || 0, all_time_rewards: allTime?.rewards || 0,
@@ -1383,6 +1547,12 @@ export default {
           ).bind(newId, b.custom_folio || null, b.table_id || null, b.customer_name || "Mostrador",
                  b.customer_phone || "", notes, JSON.stringify(items), total, total, b.channel || "restaurante", b.loyalty_consent ? 1 : 0, tenantId).run();
           await db.prepare("UPDATE orders SET created_by=?, created_by_name=? WHERE id=? AND tenant_id=?").bind(sess.user_id || null, whoName, newId, tenantId).run();
+          ctx.waitUntil((async () => {
+            const coc = items.some((i) => (i.destination || "cocina") === "cocina"), bar = items.some((i) => i.destination === "barra");
+            const ids = new Set([...(await roleUserIds("admin")), ...(coc ? await roleUserIds("cocina") : []), ...(bar ? await roleUserIds("barra") : [])]);
+            const tbl = b.table_id ? await db.prepare("SELECT name FROM tables WHERE id=?").bind(b.table_id).first().catch(() => null) : null;
+            await notifyUsers([...ids], { title: "🎾 Nueva comanda #" + (b.custom_folio || newId.slice(0, 6)), body: (tbl?.name || "Mostrador") + " · " + whoName, tag: "order-" + newId });
+          })());
           return json({ id: newId, created_by_name: whoName }, 201);
         }
 
@@ -1406,6 +1576,10 @@ export default {
                closed_at=datetime('now'), updated_at=datetime('now') WHERE id=?`
             ).bind(method, id),
           ]);
+          ctx.waitUntil((async () => {
+            const admins = await roleUserIds("admin");
+            await notifyUsers(admins, { title: "🧾 Cobro #" + (o.custom_folio || o.id.slice(0, 6)), body: "$" + o.total + " · " + method, tag: "pay-" + id });
+          })());
           return json({ ok: true, paid: o.total, method, loyalty, folio: o.custom_folio || o.id.slice(0, 6) });
         }
 
@@ -1452,6 +1626,16 @@ export default {
           const total = calcTotal(items);
           await db.prepare("UPDATE orders SET status=?, items=?, subtotal=?, total=?, notes=?, updated_at=datetime('now') WHERE id=?")
             .bind(status, JSON.stringify(items), total, total, notes, id).run();
+          if (b.ready === "cocina" || b.ready === "barra" || deliveredNow) {
+            ctx.waitUntil((async () => {
+              const admins = await roleUserIds("admin");
+              const mesero = cur.created_by ? [cur.created_by] : [];
+              const ids = new Set([...admins, ...mesero]);
+              const folio = "#" + (cur.custom_folio || id.slice(0, 6));
+              if (deliveredNow) await notifyUsers([...ids], { title: "🍽️ Pedido entregado " + folio, body: "Ya se le llevó al cliente", tag: "order-" + id });
+              else await notifyUsers([...ids], { title: (b.ready === "barra" ? "☕ Bebidas" : "🍳 Alimentos") + " listos " + folio, body: "Toca para ver la orden", tag: "order-" + id });
+            })());
+          }
           return json({ ok: true, status, delivered: deliveredNow });
         }
 
@@ -1631,7 +1815,7 @@ export default {
           db.prepare("DELETE FROM payments WHERE order_id=? AND tenant_id=?").bind(orderId, tenantId),
           db.prepare("DELETE FROM orders WHERE id=? AND tenant_id=?").bind(orderId, tenantId),
         ];
-        // 4) Quitar el sello de lealtad que dio ese cobro
+        // 4) Quitar la estrella de lealtad que dio ese cobro
         let stampRemoved = false;
         const phone = o ? String(o.customer_phone || "").replace(/\D/g, "").slice(-10) : "";
         if (o && o.loyalty_consent && phone.length === 10) {
