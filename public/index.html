@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#111">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Artmmx">
 <title>Artmmx · Panel</title>
 <style>
 :root{ font-family:Inter,Arial,sans-serif; color:#111; background:#f5f5f5; --dark:#111; --muted:#707070; --card:#fff; }
@@ -168,8 +172,13 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
         <select id="orderType"><option value="Restaurante">🍽️ Restaurante</option><option value="Para Llevar">📦 Para Llevar</option></select>
       </label>
       <label>Mesa / Cancha:<select id="tableSelect" onchange="onTableChange()"></select></label>
-      <label>WhatsApp (10 dígitos):<input id="customerPhone" placeholder="Ej. 7711234567" maxlength="10"></label>
-      <label>Nombre del cliente:<input id="customerName" placeholder="Nombre completo"></label>
+      <label>WhatsApp (opcional):<input id="customerPhone" placeholder="Solo si el cliente quiere dar sus datos" maxlength="10"></label>
+      <label>Nombre del cliente:<input id="customerName" placeholder="Nombre completo (opcional)"></label>
+      <label class="row" style="gap:8px;grid-column:1/-1;font-weight:600" title="Actívala solo si el cliente acepta">
+        <input type="checkbox" id="wantsLoyalty" style="width:auto" onchange="$('customerPhone').placeholder=this.checked?'Necesario para la tarjeta (10 dígitos)':'Solo si el cliente quiere dar sus datos'">
+        ⭐ El cliente quiere la tarjeta de lealtad
+      </label>
+      <div id="loyaltyFollowup" class="hidden" style="grid-column:1/-1"></div>
       
     </div>
     <div id="linkBanner"></div>
@@ -247,7 +256,7 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
   </div>
   <div class="card" style="margin-top:15px;border-color:#fca5a5">
     <h2 style="margin-top:0">🧾 Cobros desde el último corte</h2>
-    <p class="muted" style="margin-top:-4px">Para anular un cobro (por ejemplo, de prueba) se necesitan <b>la contraseña del admin en turno</b> y <b>la clave del sistema</b>. Se borran el cobro y la orden, y se quita el sello de lealtad.</p>
+    <p class="muted" style="margin-top:-4px">Para anular un cobro (por ejemplo, de prueba) se necesitan <b>la contraseña del admin en turno</b> y <b>la clave del sistema</b>. Se borran el cobro y la orden, y se quitan las estrellas de lealtad.</p>
     <div id="payList" style="overflow-x:auto"></div>
     <h3 style="margin-bottom:6px">Historial de anulaciones</h3>
     <div id="voidList" style="overflow-x:auto"></div>
@@ -298,7 +307,7 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
     <div id="campaignBar"></div>
   </div>
   <div class="card" style="margin-top:15px;">
-    <div class="row"><input id="loyaltySearch" class="search" placeholder="🔎 Buscar por nombre o teléfono" oninput="renderLoyalty()"><button onclick="toggleAllCustomers()">☑️ Todos</button></div>
+    <div class="row"><input id="loyaltySearch" class="search" placeholder="🔎 Buscar por nombre o teléfono" oninput="renderLoyalty()"><button onclick="toggleAllCustomers()">☑️ Todos</button><button class="success" onclick="openManualStamp()">⭐ Estrella manual</button></div>
     <div id="loyaltyList" style="overflow-x:auto;margin-top:10px;"></div>
   </div>
 </section>
@@ -365,7 +374,18 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
 
 <section id="config" class="view hidden">
   <h1 class="title">⚙️ Configuración</h1>
-  <div class="card">
+  <div class="card" style="background:#f0fdf4;border:1px solid #16a34a">
+    <h2 style="margin-top:0">🔔 Notificaciones en este celular</h2>
+    <p class="muted" style="margin-top:-4px">Te llegan solas y con sonido: comandas nuevas, pedidos listos, entregas y cobros — sin abrir WhatsApp ni tocar nada.</p>
+    <div id="pushStatus" class="muted" style="margin-bottom:8px">Revisando…</div>
+    <div class="row" style="gap:8px;flex-wrap:wrap">
+      <button class="success" id="pushOnBtn" onclick="enablePush()">🔔 Activar en este dispositivo</button>
+      <button id="pushTestBtn" class="hidden" onclick="testPush()">🔊 Mandarme una de prueba</button>
+      <button id="pushOffBtn" class="hidden" onclick="disablePush()">🔕 Desactivar</button>
+    </div>
+    <p class="muted" style="font-size:12px;margin-top:8px" id="pushIosHint"></p>
+  </div>
+  <div class="card" style="margin-top:15px">
     <h2 style="margin-top:0">Marca y pedidos</h2>
     <div class="grid">
       <label>Nombre del negocio:<input id="cfgName"></label>
@@ -858,15 +878,19 @@ async function sendOrder(){
       waComanda({folio:linkedOrder.custom_folio||linkedOrder.id.slice(0,6), mesa:tableLabel(linkedOrder), cliente:cleanName(linkedOrder.customer_name), items:sentItems, notes, extra:true});
     }else{
       let phone=$("customerPhone").value.replace(/\D/g,''); if(phone.length>10) phone=phone.slice(-10);
-      if(phone.length<10) return toast("WhatsApp de 10 dígitos obligatorio.");
+      const wantsLoyalty=$("wantsLoyalty").checked;
+      if(wantsLoyalty && phone.length!==10) return toast("Para la tarjeta de lealtad necesitamos su WhatsApp (10 dígitos).");
+      if(!wantsLoyalty && phone.length>0 && phone.length!==10) return toast("El WhatsApp debe tener 10 dígitos, o déjalo vacío.");
       const name=$("customerName").value.trim()||"Mostrador";
       const d=new Date(), p2=n=>String(n).padStart(2,'0');
       const customFolio=`${p2(d.getDate())}${p2(d.getMonth()+1)}-${p2(d.getHours())}${p2(d.getMinutes())}`;
-      await api("/orders",{method:"POST",body:JSON.stringify({table_id:$("tableSelect").value, customer_name:name, customer_phone:phone, notes:JSON.stringify(notes), items:cart, custom_folio:customFolio})});
+      await api("/orders",{method:"POST",body:JSON.stringify({table_id:$("tableSelect").value, customer_name:name, customer_phone:phone, notes:JSON.stringify(notes), items:cart, custom_folio:customFolio, loyalty_consent:wantsLoyalty?1:0})});
       toast("¡Orden enviada!");
       waComanda({folio:customFolio, mesa:tableTxt, cliente:name, items:sentItems, notes});
+      if(!wantsLoyalty) offerLoyaltyFollowup(name==="Mostrador"?"":name, phone); else $("loyaltyFollowup").classList.add("hidden");
     }
     cart=[]; $("customerName").value=""; $("customerPhone").value=""; $("notesKitchen").value=""; $("notesBarra").value="";
+    $("wantsLoyalty").checked=false; $("customerPhone").placeholder="Solo si el cliente quiere dar sus datos";
     $("tableSelect").value=""; linkedOrder=null; offsetPeople=0; currentPerson=1;
     renderCart(); renderLinkBanner(); renderPersonChips(); loadAll();
   }catch(e){toast(e.message)}
@@ -1023,7 +1047,7 @@ async function payAndClear(id){
   const o=(allOrdersCache||[]).find(x=>String(x.id)===String(id));
   try{
     const r=await api(`/orders/${id}/payments`, {method:"POST", body:JSON.stringify({method:m})});
-    toast(r.loyalty ? (r.loyalty.justEarned?`Cobrado ✅ · 🎉 ¡Ganó su recompensa de lealtad!`:`Cobrado ✅ · Sello ${r.loyalty.stamps}/${r.loyalty.goal}`) : "Cuenta finalizada");
+    toast(r.loyalty ? (r.loyalty.justEarned?`Cobrado ✅ · 🎉 ¡Ganó su recompensa de lealtad!`:`Cobrado ✅ · Estrella ${r.loyalty.stamps}/${r.loyalty.goal}`) : "Cuenta finalizada");
     loadOrders(); if(currentView==="caja") loadDashboard();
     if(o) waTicket(o,r);
   }catch(e){ toast(e.message); }
@@ -1065,8 +1089,29 @@ async function sendLoyaltyCard(phone,name){
   try{
     const r=await api("/loyalty-token",{method:"POST",body:JSON.stringify({phone,name})});
     const link=location.origin+BASE+"tarjeta.html?token="+r.token;
-    window.open(`https://wa.me/52${phone}?text=${encodeURIComponent(`Hola ${firstName(name)} 👋 Aquí está tu tarjeta de lealtad de The Rush 🎾☕. Cada visita suma un sello:\n${link}`)}`,'_blank');
+    const biz=settingsCache?.business_name||"";
+    window.open(`https://wa.me/52${phone}?text=${encodeURIComponent(`Hola ${firstName(name)} 👋 Aquí está tu tarjeta de lealtad${biz?" de "+biz:""} ⭐. Cada visita suma una estrella:\n${link}`)}`,'_blank');
   }catch(e){ toast(e.message); }
+}
+// Si el cliente no quiso dar sus datos al pedir, se le puede invitar después sin presionarlo
+function offerLoyaltyFollowup(name,phone){
+  const box=$("loyaltyFollowup");
+  box.innerHTML=`<div class="card" style="background:#fffbeb;border:1px solid #fcd34d">
+    <b>⭐ ¿Se anima a la tarjeta de lealtad?</b>
+    <p class="muted" style="font-size:13px;margin:4px 0 8px">Si cambia de opinión, pide su WhatsApp y le mandamos el link. No es necesario.</p>
+    <div class="row" style="gap:8px;flex-wrap:wrap">
+      <input id="followupPhone" placeholder="WhatsApp (10 dígitos)" maxlength="10" value="${esc(phone||'')}" style="flex:1;min-width:160px">
+      <button class="success" onclick="sendFollowupLoyalty('${esc(name||'')}')">📲 Enviar tarjeta</button>
+      <button onclick="$('loyaltyFollowup').classList.add('hidden')">Omitir</button>
+    </div>
+  </div>`;
+  box.classList.remove("hidden");
+}
+async function sendFollowupLoyalty(name){
+  const phone=$("followupPhone").value.replace(/\D/g,"").slice(-10);
+  if(phone.length!==10) return toast("El WhatsApp debe tener 10 dígitos.");
+  await sendLoyaltyCard(phone, name||"Cliente");
+  $("loyaltyFollowup").classList.add("hidden");
 }
 function sendTicketWhatsApp(){
   if(!currentTicketData) return;
@@ -1173,7 +1218,7 @@ async function loadSettings(){
   try{ $("hubExtra").value=(JSON.parse(settingsCache.hub_extra_links||"[]")||[]).map(x=>`${x.label} | ${x.url}`).join("\n"); }catch(e){ $("hubExtra").value=""; }
   $("hubLinkBox").value = location.origin + BASE + "hub.html"; $("hubOpenBtn").href = BASE + "hub.html";
   updateHubQr();
-  loadDuty(); loadR2Status();
+  loadDuty(); loadR2Status(); refreshPushUI();
 }
 // ===== ANULAR COBROS =====
 let payCache={payments:[]}, voidTarget=null;
@@ -1207,7 +1252,7 @@ async function confirmVoid(){
   const btn=$("voidGo"); btn.disabled=true; btn.textContent="Verificando…";
   try{
     const r=await api("/void-payment",{method:"POST",body:JSON.stringify({order_id:voidTarget.order_id, reason, admin_password:pw, pin})});
-    closeVoid(); toast(`✅ Cobro de $${r.amount} anulado · autorizó ${r.authorized_by}`+(r.stamp_removed?" · se quitó el sello":""));
+    closeVoid(); toast(`✅ Cobro de $${r.amount} anulado · autorizó ${r.authorized_by}`+(r.stamp_removed?" · se quitó la estrella":""));
     loadDashboard(); loadPayments();
   }catch(e){ toast(e.message); $("voidAdminPw").value=""; $("voidPin").value=""; }
   btn.disabled=false; btn.textContent="🚫 Anular definitivamente";
@@ -1304,6 +1349,52 @@ async function waTicket(o,r){
   t.team.filter(u=>u.role==='admin' && u.id!==t.me).forEach(u=>rows.push({icon:"👑",label:u.name,hint:"Admin"+(String(u.id)===String(t.on_duty)?" · en turno":""),href:waLink(u.whatsapp,msg)}));
   rows.push({icon:"👥",label:"Grupo de administración",hint:"Elige el grupo o contacto en WhatsApp",href:waPick(msg)});
   showWa(`🧾 Avisar ticket cobrado`, `Orden #${r.folio} · $${r.paid}`, rows);
+}
+
+// ===== NOTIFICACIONES PUSH (app instalable) =====
+let swReg=null;
+if("serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js").then(r=>{ swReg=r; }).catch(()=>{}); }
+const isIOS=/iphone|ipad|ipod/i.test(navigator.userAgent);
+const isStandalone=window.matchMedia("(display-mode: standalone)").matches || navigator.standalone===true;
+function b64uToUint8(s){ s=s.replace(/-/g,"+").replace(/_/g,"/"); while(s.length%4) s+="="; const raw=atob(s); const out=new Uint8Array(raw.length); for(let i=0;i<raw.length;i++) out[i]=raw.charCodeAt(i); return out; }
+async function refreshPushUI(){
+  if(!$("pushStatus")) return;
+  const supported = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  if(!supported){
+    $("pushStatus").textContent = isIOS && !isStandalone ? "En iPhone, primero agrega la app a tu pantalla de inicio (abajo) y ábrela desde ahí." : "Este navegador no soporta notificaciones push.";
+    $("pushOnBtn").classList.add("hidden");
+  } else {
+    const reg = swReg || await navigator.serviceWorker.getRegistration();
+    const sub = reg ? await reg.pushManager.getSubscription() : null;
+    if(Notification.permission==="denied"){ $("pushStatus").textContent="🚫 Las notificaciones están bloqueadas. Actívalas en los ajustes del navegador o del celular."; $("pushOnBtn").classList.add("hidden"); }
+    else if(sub){ $("pushStatus").innerHTML="✅ <b>Activadas</b> en este dispositivo."; $("pushOnBtn").classList.add("hidden"); $("pushTestBtn").classList.remove("hidden"); $("pushOffBtn").classList.remove("hidden"); }
+    else { $("pushStatus").textContent="Aún no están activadas en este dispositivo."; $("pushOnBtn").classList.remove("hidden"); $("pushTestBtn").classList.add("hidden"); $("pushOffBtn").classList.add("hidden"); }
+  }
+  $("pushIosHint").textContent = isIOS && !isStandalone ? "📱 iPhone: toca el botón Compartir de Safari → \"Agregar a pantalla de inicio\". Abre la app desde ese ícono y activa aquí las notificaciones." : "Tip: en Android, el navegador te ofrece \"Instalar app\" — así queda como una app más, con su ícono.";
+}
+async function enablePush(){
+  try{
+    const perm = await Notification.requestPermission();
+    if(perm!=="granted") return toast("Sin permiso no podemos avisarte. Actívalo en los ajustes.");
+    const reg = swReg || await navigator.serviceWorker.ready;
+    const { key } = await api("/push-vapid-key");
+    if(!key) return toast("El servidor aún no tiene las llaves de notificaciones (ver README).");
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:b64uToUint8(key) });
+    await api("/push-subscribe",{method:"POST",body:JSON.stringify({subscription:sub.toJSON()})});
+    toast("🔔 Notificaciones activadas"); refreshPushUI();
+  }catch(e){ toast("No se pudo activar: "+e.message); }
+}
+async function testPush(){
+  try{ const r=await api("/push-test",{method:"POST",body:"{}"}); toast(r.sent?"🔊 Enviada. ¿Te sonó?":"No se pudo enviar. Intenta desactivar y activar de nuevo."); }
+  catch(e){ toast(e.message); }
+}
+async function disablePush(){
+  try{
+    const reg = swReg || await navigator.serviceWorker.getRegistration();
+    const sub = reg ? await reg.pushManager.getSubscription() : null;
+    if(sub){ await api("/push-unsubscribe",{method:"POST",body:JSON.stringify({endpoint:sub.endpoint})}); await sub.unsubscribe(); }
+    toast("🔕 Notificaciones desactivadas"); refreshPushUI();
+  }catch(e){ toast(e.message); }
 }
 
 // ===== TURNOS: mínimo 2 al día (Matutino / Vespertino), con recordatorio =====
@@ -1440,15 +1531,19 @@ async function loadLoyaltyDash(){
   try{
     const d=await api("/loyalty-dashboard");
     $("loyKpis").innerHTML=[
-      ["🎟️ Sellos hoy",d.stamps_today],
+      ["⭐ Estrellas hoy",d.stamps_today],
       ["🎁 Recompensas hoy",d.rewards_today],
       ["👛 Tarjetas activas",d.active_wallets],
       ["🔁 Clientes recurrentes",d.returning_customers],
-      ["📊 Sellos históricos",d.all_time_stamps],
+      ["📊 Estrellas históricas",d.all_time_stamps],
       ["🏆 Recompensas entregadas",d.all_time_rewards],
     ].map(([label,val])=>`<div class="card" style="padding:14px"><div class="muted" style="font-size:11px;text-transform:uppercase;font-weight:800">${label}</div><div style="font-size:24px;font-weight:900;margin-top:4px">${val}</div></div>`).join("");
-    const iconFor={stamp:"🎟️",reward:"🎉"}, labelFor={stamp:"sello dado",reward:"¡ganó su recompensa!"};
-    $("loyFeed").innerHTML = d.feed.length ? d.feed.map(f=>`<div class="row between" style="padding:6px 0;border-bottom:1px dotted #e5e7eb"><span>${iconFor[f.type]||"•"} <b>${esc(f.name||"Cliente")}</b> — ${labelFor[f.type]||f.type}</span><span class="muted" style="font-size:12px">${esc(f.created_at)}</span></div>`).join("") : "<p class='muted'>Todavía no hay actividad.</p>";
+    const iconFor={stamp:"⭐",stamp_manual:"⭐",reward:"🎉"}, labelFor={stamp:"estrella dada",reward:"¡ganó su recompensa!"};
+    $("loyFeed").innerHTML = d.feed.length ? d.feed.map(f=>{
+      const manual = f.type==="stamp_manual";
+      const label = manual ? `estrella manual${f.reason?`: ${esc(f.reason)}`:''}${f.done_by?` · por ${esc(f.done_by)}`:''}` : (labelFor[f.type]||f.type);
+      return `<div class="row between" style="padding:6px 0;border-bottom:1px dotted #e5e7eb"><span>${iconFor[f.type]||"•"} <b>${esc(f.name||"Cliente")}</b> — ${label}</span><span class="muted" style="font-size:12px">${esc(f.created_at)}</span></div>`;
+    }).join("") : "<p class='muted'>Todavía no hay actividad.</p>";
   }catch(e){ $("loyFeed").textContent=e.message; }
   const link=$("joinLinkBox").value;
   if(link){
@@ -1457,6 +1552,22 @@ async function loadLoyaltyDash(){
   }
 }
 function copyJoinLink(){ $("joinLinkBox").select(); document.execCommand("copy"); toast("Link copiado ✅"); }
+function openManualStamp(phone,name){
+  $("msPhone").value=phone||""; $("msName").value=name||""; $("msReason").value=""; $("msQty").value="1";
+  $("manualStampModal").classList.remove("hidden"); $("msReason").focus();
+}
+async function submitManualStamp(){
+  const phone=$("msPhone").value.replace(/\D/g,"").slice(-10);
+  const reason=$("msReason").value.trim();
+  if(phone.length!==10) return toast("El WhatsApp debe tener 10 dígitos");
+  if(!reason) return toast("Escribe el motivo de la estrella");
+  try{
+    const r=await api("/loyalty-manual-stamp",{method:"POST",body:JSON.stringify({phone, name:$("msName").value.trim(), reason, qty:Number($("msQty").value)||1})});
+    $("manualStampModal").classList.add("hidden");
+    toast(r.justEarned?`🎉 ¡Llegó a su recompensa! (${r.stamps}/${r.goal})`:`✅ Estrella agregada (${r.stamps}/${r.goal})`);
+    loadLoyaltyDash(); loadLoyaltyCustomers();
+  }catch(e){ toast(e.message); }
+}
 // ----- Admin en turno -----
 async function loadDuty(){
   try{
@@ -2034,7 +2145,7 @@ function filteredCustomers(){
 function renderLoyalty(){
   const list=filteredCustomers();
   $("selCount").textContent=selectedPhones.size;
-  $("loyaltyList").innerHTML = list.length ? `<table><thead><tr><th></th><th>Cliente</th><th>WhatsApp</th><th>Visitas</th><th>Gastado</th><th>Última</th><th></th></tr></thead><tbody>${list.map(({c,idx})=>`<tr><td><input type="checkbox" style="width:auto" ${selectedPhones.has(c.phone)?'checked':''} onchange="toggleCustomer(${idx})"></td><td><b>${esc(c.name)}</b></td><td>${esc(c.phone)}</td><td>${c.visits}</td><td>$${Math.round(c.spent)}</td><td>${esc((c.last_visit||"").slice(0,10))}</td><td><button class="success" onclick="messageCustomer(${idx})">💬</button></td></tr>`).join("")}</tbody></table>` : "<p class='muted'>Aún no hay clientes. Aparecen aquí cuando el mesero captura nombre y WhatsApp en una orden.</p>";
+  $("loyaltyList").innerHTML = list.length ? `<table><thead><tr><th></th><th>Cliente</th><th>WhatsApp</th><th>Visitas</th><th>Gastado</th><th>Última</th><th></th></tr></thead><tbody>${list.map(({c,idx})=>`<tr><td><input type="checkbox" style="width:auto" ${selectedPhones.has(c.phone)?'checked':''} onchange="toggleCustomer(${idx})"></td><td><b>${esc(c.name)}</b></td><td>${esc(c.phone)}</td><td>${c.visits}</td><td>$${Math.round(c.spent)}</td><td>${esc((c.last_visit||"").slice(0,10))}</td><td><button class="success" onclick="messageCustomer(${idx})">💬</button> <button onclick="openManualStamp('${esc(c.phone)}','${esc(c.name).replace(/'/g,"")}')">⭐</button></td></tr>`).join("")}</tbody></table>` : "<p class='muted'>Aún no hay clientes. Aparecen aquí cuando el mesero captura nombre y WhatsApp en una orden.</p>";
 }
 function toggleCustomer(idx){ const p=customers[idx].phone; if(selectedPhones.has(p)) selectedPhones.delete(p); else selectedPhones.add(p); renderLoyalty(); }
 function toggleAllCustomers(){
@@ -2106,6 +2217,17 @@ async function myDeliveryNext(oid,status){ try{ await api(`/orders/${oid}/delive
 
 boot();
 </script>
+<div id="manualStampModal" class="modal hidden" onclick="if(event.target===this)$('manualStampModal').classList.add('hidden')">
+  <div class="modalbox" style="max-width:420px">
+    <div class="row between"><h2 style="margin:0;font-size:20px">⭐ Estrella manual</h2><button onclick="$('manualStampModal').classList.add('hidden')">✕</button></div>
+    <p class="muted" style="font-size:13px;margin-top:-4px">Se liga a la tarjeta por WhatsApp; si no existe, se crea.</p>
+    <label>WhatsApp (10 dígitos):<input id="msPhone" maxlength="14" inputmode="numeric"></label>
+    <label>Nombre (si es cliente nuevo):<input id="msName" placeholder="Cliente"></label>
+    <label>Motivo de la estrella:<input id="msReason" placeholder="Ej. Cumpleaños, cortesía, error del sistema..." maxlength="200"></label>
+    <label>Cuántas estrellas:<input id="msQty" type="number" min="1" max="10" value="1"></label>
+    <button class="success" style="width:100%;margin-top:12px;padding:13px" onclick="submitManualStamp()">⭐ Agregar estrella</button>
+  </div>
+</div>
 <div id="lockView" class="hidden" style="position:fixed;inset:0;background:#0F141C;color:#fff;display:flex;align-items:center;justify-content:center;padding:24px;z-index:999;font-family:inherit">
   <div style="max-width:420px;text-align:center">
     <div style="font-size:52px">⏳</div>
