@@ -1,4 +1,4 @@
-# RUSH POS v38.3 — "The Rush: Club · Café · Cocina"
+# RUSH POS v39.0 — "The Rush: Club · Café · Cocina"
 
 - **Fecha:** 25 de septiembre de 2026
 - **Plataforma:** Cloudflare Workers + D1 (`rush-pos-db`)
@@ -33,6 +33,7 @@
 | v38.0 | App instalable (PWA) con notificaciones push automáticas y con sonido: comandas nuevas, pedidos listos, entregas, cobros y pedidos en línea llegan directo al celular, sin tocar "enviar". |
 | v38.1 | La llave pública de las notificaciones ahora viene dentro de `server.js` (ya no depende de variables del Worker). Solo falta el Secreto `VAPID_PRIVATE_KEY`. |
 | v38.2 | Corrige el cifrado de las notificaciones (no cumplía el estándar y el celular no habría podido leerlas). Ahora muestra en pantalla el motivo real si un envío falla. |
+| v39.0 | Arreglos para negocios nuevos: (1) la carta pública salía vacía para TODOS (también The Rush) porque pedía sesión — ya abre sin sesión; (2) `/t/<negocio>/` mandaba de regreso al registro — ahora abre el login del negocio; (3) `/t/<negocio>/menu.html` perdía el negocio y mostraba la carta de The Rush — ya no; (4) la carta de un negocio nuevo muestra SU nombre; (5) registro en un solo paso, con aviso claro si el usuario ya existe; (6) ajustes base genéricos para cada negocio. Agrega `sql/v39_usuarios.sql` (roles Barra/Repartidor/Editor y usuarios únicos por negocio) y `test/v39-registro.mjs`. |
 | **v38.3** | Las llaves de las notificaciones ya no se pegan en Cloudflare: el sistema las crea solo y las guarda en la base de datos, y los dos Workers usan exactamente las mismas. |
 
 No hay versión marcada como estable todavía.

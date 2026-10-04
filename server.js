@@ -1,4 +1,4 @@
-// RUSH POS v24.3 - Cloudflare Worker + D1
+// RUSH POS v39.0 - Cloudflare Worker + D1
 const ROLES = ["admin", "mesero", "cocina", "barra", "repartidor", "editor"];
 
 // ÍNDICE (se regenera con cada versión — no editar a mano; ver tests/README.md):
@@ -101,6 +101,24 @@ async function serveImage(path, env, ctx) {
 const SESSION_MS = 24 * 60 * 60 * 1000;
 let sessionsReady = false;
 let menuSchemaReady2 = false;
+const seededTenants = new Set();
+// Ajustes base de un negocio nuevo: genéricos, sin nada de The Rush.
+async function seedTenantSettings(db, tenantId, name) {
+  const defs = [
+    ["business_name", name || "Mi negocio"],
+    ["whatsapp_order_number", ""], ["whatsapp_on_duty", ""], ["rappi_link", ""], ["uber_link", ""],
+    ["loyalty_goal", "10"], ["loyalty_reward", "Un producto de cortesía"],
+    ["business_lat", ""], ["business_lng", ""],
+    ["delivery_base_fee", "20"], ["delivery_rate_km", "8"],
+    ["payment_info", ""], ["menu_tagline", ""], ["business_hours", ""],
+    ["show_photos", "1"],
+    ["google_reviews_link", ""], ["instagram_link", ""], ["facebook_link", ""],
+    ["wifi_network", ""], ["wifi_password", ""], ["promo_link", ""],
+    ["hub_extra_links", "[]"], ["hub_tagline", ""],
+  ];
+  await db.batch(defs.map(([k, v]) =>
+    db.prepare("INSERT OR IGNORE INTO tenant_settings (tenant_id,key,value) VALUES (?,?,?)").bind(tenantId, k, v)));
+}
 let menuSchemaReady = false;
 
 // Estructura inicial del menú (tipo Starbucks: 2 secciones y categorías por "cómo lo pide el cliente")
@@ -358,9 +376,31 @@ export default {
     // → la raíz "/" muestra el registro público, no el login de un negocio en particular.
     const isMarketingHost = !url.hostname.split(".")[0].startsWith("rush");
     if (!path.startsWith("/api/")) {
+      // v39: páginas de un negocio nuevo (/t/<slug>/…). Antes "/t/<slug>/" mandaba al registro y
+      // "/t/<slug>/menu.html" perdía el prefijo (Cloudflare redirigía a "/menu" = carta de The Rush).
+      const hasPrefix = url.pathname.startsWith("/t/") && tenantSlug !== DEFAULT_TENANT;
+      const prefix = hasPrefix ? "/t/" + tenantSlug : "";
+      if (hasPrefix && url.pathname === prefix) return Response.redirect(url.origin + prefix + "/" + url.search, 301);
+      let assetPath = path;
+      if (path === "/" || path === "/index.html") {
+        assetPath = isMarketingHost && !hasPrefix ? "/registro" : "/";
+      } else if (path.endsWith(".html")) {
+        assetPath = path.slice(0, -5); // /menu.html → /menu (así Cloudflare no redirige)
+      }
       const assetUrl = new URL(request.url);
-      assetUrl.pathname = isMarketingHost && (path === "/" || path === "/index.html") ? "/registro.html" : path;
-      return env.ASSETS.fetch(new Request(assetUrl, request));
+      assetUrl.pathname = assetPath;
+      const res = await env.ASSETS.fetch(new Request(assetUrl, request));
+      // Si Cloudflare aún responde con redirección, se conserva el prefijo del negocio.
+      const loc = res.headers.get("Location");
+      if (hasPrefix && loc && res.status >= 300 && res.status < 400) {
+        const to = new URL(loc, url);
+        if (to.origin === url.origin && !to.pathname.startsWith("/t/")) {
+          const h = new Headers(res.headers);
+          h.set("Location", prefix + to.pathname + to.search);
+          return new Response(null, { status: res.status, headers: h });
+        }
+      }
+      return res;
     }
 
 
@@ -419,12 +459,13 @@ export default {
           ["wifi_network", ""], ["wifi_password", ""], ["promo_link", ""],
           ["hub_extra_links", "[]"], ["hub_tagline", ""],
         ];
-        if (tenantId === "rush") {
-          for (const [k, v] of defSettings) await db.prepare("INSERT OR IGNORE INTO pos_settings (key,value) VALUES (?,?)").bind(k, v).run();
-        } else {
-          for (const [k, v] of defSettings) await db.prepare("INSERT OR IGNORE INTO tenant_settings (tenant_id,key,value) VALUES (?,?,?)").bind(tenantId, k, v).run();
-        }
+        for (const [k, v] of defSettings) await db.prepare("INSERT OR IGNORE INTO pos_settings (key,value) VALUES (?,?)").bind(k, v).run();
         menuSchemaReady2 = true;
+      }
+      // v39: cada negocio nuevo recibe sus ajustes base (antes solo se hacía una vez por servidor y con textos de The Rush)
+      if (tenantId !== "rush" && !seededTenants.has(tenantId)) {
+        await seedTenantSettings(db, tenantId, tenant.name);
+        seededTenants.add(tenantId);
       }
 
       if (!sessionsReady) {
@@ -625,25 +666,39 @@ export default {
         if (!bizName || !slug || !adminName || !adminUser) return json({ error: "Faltan datos del negocio o del administrador" }, 400);
         if (slug.length < 3 || slug === "t" || slug === "rush") return json({ error: "Ese nombre para tu URL no es válido, prueba otro" }, 400);
         if (adminPass.length < 4) return json({ error: "La contraseña debe tener al menos 4 caracteres" }, 400);
+        if (!/^[a-zA-Z0-9._-]{3,30}$/.test(adminUser)) return json({ error: "El usuario solo puede llevar letras, números, punto o guion (3 a 30), sin espacios" }, 400);
         const dupSlug = await db.prepare("SELECT id FROM tenants WHERE slug=?").bind(slug).first();
         if (dupSlug) return json({ error: "Ese nombre de negocio ya está en uso, prueba otro" }, 409);
+        // v39: hasta migrar la tabla users, el usuario debe ser único en toda la plataforma
+        const dupUser = await db.prepare("SELECT id FROM users WHERE lower(username)=lower(?)").bind(adminUser).first();
+        if (dupUser) return json({ error: "Ese usuario ya lo usa otra persona. Prueba con uno más tuyo, por ejemplo: " + adminUser + "-" + slug.split("-")[0] }, 409);
         const modules = {
           cocina: !!b.modules?.cocina, barra: !!b.modules?.barra, mesas: !!b.modules?.mesas,
           canchas: !!b.modules?.canchas, repartidores: !!b.modules?.repartidores, loyalty: !!b.modules?.loyalty,
         };
         const newTenantId = crypto.randomUUID();
         const trialDays = 30;
-        await db.prepare(
-          `INSERT INTO tenants (id, slug, name, modules, plan_status, trial_ends_at, onboarded, contact_name, contact_phone, contact_email)
-           VALUES (?,?,?,?,'trial', datetime('now','+${trialDays} days'), 0, ?, ?, ?)`
-        ).bind(newTenantId, slug, bizName, JSON.stringify(modules), adminName, contactPhone, String(b.contact_email || "").trim()).run();
         const salt = newSalt();
         const hash = await hashPw(adminPass, salt);
         const uid = crypto.randomUUID();
-        await db.prepare(
-          `INSERT INTO users (id, username, name, role, password_hash, password_salt, active, created_at, updated_at, approved, tenant_id)
-           VALUES (?,?,?, 'admin', ?,?,1,datetime('now'),datetime('now'),1,?)`
-        ).bind(uid, adminUser, adminName, hash, salt, newTenantId).run();
+        // v39: negocio + administrador en un solo paso (si algo falla, no queda un negocio a medias)
+        try {
+          await db.batch([
+            db.prepare(
+              `INSERT INTO tenants (id, slug, name, modules, plan_status, trial_ends_at, onboarded, contact_name, contact_phone, contact_email)
+               VALUES (?,?,?,?,'trial', datetime('now','+${trialDays} days'), 0, ?, ?, ?)`
+            ).bind(newTenantId, slug, bizName, JSON.stringify(modules), adminName, contactPhone, String(b.contact_email || "").trim()),
+            db.prepare(
+              `INSERT INTO users (id, username, name, role, password_hash, password_salt, active, created_at, updated_at, approved, tenant_id)
+               VALUES (?,?,?, 'admin', ?,?,1,datetime('now'),datetime('now'),1,?)`
+            ).bind(uid, adminUser, adminName, hash, salt, newTenantId),
+          ]);
+        } catch (e) {
+          await db.prepare("DELETE FROM tenants WHERE id=?").bind(newTenantId).run().catch(() => {});
+          return json({ error: "No se pudo crear el negocio. Prueba con otro usuario o escríbenos." }, 409);
+        }
+        await seedTenantSettings(db, newTenantId, bizName);
+        seededTenants.add(newTenantId);
         return json({ ok: true, slug, url: "/t/" + slug + "/" }, 201);
       }
 
@@ -735,61 +790,8 @@ export default {
       }
 
 
-      // ===== Sesión obligatoria para todo lo demás =====
-      const auth = request.headers.get("Authorization") || "";
-      const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-      const sess = token
-        ? await db.prepare("SELECT * FROM pos_sessions WHERE token=? AND expires_at>? AND tenant_id=?").bind(token, Date.now(), tenantId).first()
-        : null;
-      if (!sess) return json({ error: "Sesión expirada. Inicia sesión de nuevo." }, 401);
-      const isAdmin = sess.role === "admin";
-
-      // ===== NOTIFICACIONES PUSH: suscripción del celular/navegador =====
-      if (path === "/api/push-vapid-key" && request.method === "GET") return json({ key: (await loadVapid(db, env)).key });
-      if (path === "/api/push-subscribe" && request.method === "POST") {
-        const b = await request.json().catch(() => ({}));
-        const sub = b.subscription;
-        if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth) return json({ error: "Suscripción inválida" }, 400);
-        await db.prepare("DELETE FROM pos_push_subs WHERE endpoint=?").bind(sub.endpoint).run();
-        await db.prepare("INSERT INTO pos_push_subs (id,user_id,tenant_id,endpoint,p256dh,auth) VALUES (?,?,?,?,?,?)")
-          .bind(crypto.randomUUID(), sess.user_id, tenantId, sub.endpoint, sub.keys.p256dh, sub.keys.auth).run();
-        return json({ ok: true });
-      }
-      if (path === "/api/push-unsubscribe" && request.method === "POST") {
-        const b = await request.json().catch(() => ({}));
-        if (b.endpoint) await db.prepare("DELETE FROM pos_push_subs WHERE endpoint=? AND tenant_id=?").bind(b.endpoint, tenantId).run();
-        return json({ ok: true });
-      }
-      if (path === "/api/push-test" && request.method === "POST") {
-        const subs = (await db.prepare("SELECT * FROM pos_push_subs WHERE user_id=? AND tenant_id=?").bind(sess.user_id, tenantId).all()).results || [];
-        if (!subs.length) return json({ error: "No tienes notificaciones activadas en este dispositivo" }, 400);
-        const vapid = await loadVapid(db, env);
-        const results = await Promise.all(subs.map((s) => sendPush(vapid, s, { title: "🔔 Notificaciones activadas", body: "Así te van a llegar los avisos de RUSH POS.", tag: "test" })));
-        const sent = results.filter((r) => r.ok).length;
-        const bad = results.find((r) => !r.ok);
-        // Solo se reporta motivo si NO llegó a ningún dispositivo (un dispositivo viejo no debe tapar a uno que sí funciona)
-        return json({ sent, total: results.length,
-          reason: sent === 0 && bad ? (bad.error ? "error: " + bad.error : "el servicio de notificaciones respondió " + bad.status + (bad.detail ? " (" + bad.detail + ")" : "")) : "" });
-      }
-      // Estrella manual del admin, con motivo, ligada a la cuenta por WhatsApp (crea la tarjeta si no existía)
-      if (path === "/api/loyalty-manual-stamp" && request.method === "POST") {
-        if (!isAdmin) return json({ error: "Solo el administrador puede agregar estrellas manuales" }, 403);
-        const b = await request.json().catch(() => ({}));
-        const phone = String(b.phone || "").replace(/\D/g, "").slice(-10);
-        const reason = String(b.reason || "").trim().slice(0, 200);
-        const qty = Math.min(10, Math.max(1, Number(b.qty) || 1));
-        if (phone.length !== 10) return json({ error: "El WhatsApp debe tener 10 dígitos" }, 400);
-        if (!reason) return json({ error: "Escribe el motivo de la estrella" }, 400);
-        const existing = await db.prepare("SELECT name FROM pos_loyalty WHERE phone=?").bind(lk(phone)).first();
-        const name = String(b.name || existing?.name || "Cliente").trim() || "Cliente";
-        const me2 = await db.prepare("SELECT name FROM users WHERE id=?").bind(sess.user_id).first().catch(() => null);
-        const by = (me2 && me2.name) || sess.username || "Admin";
-        let last = null;
-        for (let i = 0; i < qty; i++) last = await addStamp(phone, name, { type: "stamp_manual", reason, by });
-        return json({ ...last, linked_existing: !!existing });
-      }
-
       // ===== PUBLICO (sin sesion): pagina de pedidos y tarjeta de lealtad =====
+      // v39: va ANTES de la sesión obligatoria (estaba después y la carta pública salía vacía para todos)
       if (path === "/api/public-settings" && request.method === "GET") {
         const st = await getSettings();
         const wa = await resolveOrderWa(st);
@@ -882,6 +884,60 @@ export default {
         })());
         return json({ id, folio, shipping, total, track_token: trackToken, whatsapp_to: waTo.number, card_token: cardToken }, 201);
       }
+      // ===== Sesión obligatoria para todo lo demás =====
+      const auth = request.headers.get("Authorization") || "";
+      const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+      const sess = token
+        ? await db.prepare("SELECT * FROM pos_sessions WHERE token=? AND expires_at>? AND tenant_id=?").bind(token, Date.now(), tenantId).first()
+        : null;
+      if (!sess) return json({ error: "Sesión expirada. Inicia sesión de nuevo." }, 401);
+      const isAdmin = sess.role === "admin";
+
+      // ===== NOTIFICACIONES PUSH: suscripción del celular/navegador =====
+      if (path === "/api/push-vapid-key" && request.method === "GET") return json({ key: (await loadVapid(db, env)).key });
+      if (path === "/api/push-subscribe" && request.method === "POST") {
+        const b = await request.json().catch(() => ({}));
+        const sub = b.subscription;
+        if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth) return json({ error: "Suscripción inválida" }, 400);
+        await db.prepare("DELETE FROM pos_push_subs WHERE endpoint=?").bind(sub.endpoint).run();
+        await db.prepare("INSERT INTO pos_push_subs (id,user_id,tenant_id,endpoint,p256dh,auth) VALUES (?,?,?,?,?,?)")
+          .bind(crypto.randomUUID(), sess.user_id, tenantId, sub.endpoint, sub.keys.p256dh, sub.keys.auth).run();
+        return json({ ok: true });
+      }
+      if (path === "/api/push-unsubscribe" && request.method === "POST") {
+        const b = await request.json().catch(() => ({}));
+        if (b.endpoint) await db.prepare("DELETE FROM pos_push_subs WHERE endpoint=? AND tenant_id=?").bind(b.endpoint, tenantId).run();
+        return json({ ok: true });
+      }
+      if (path === "/api/push-test" && request.method === "POST") {
+        const subs = (await db.prepare("SELECT * FROM pos_push_subs WHERE user_id=? AND tenant_id=?").bind(sess.user_id, tenantId).all()).results || [];
+        if (!subs.length) return json({ error: "No tienes notificaciones activadas en este dispositivo" }, 400);
+        const vapid = await loadVapid(db, env);
+        const results = await Promise.all(subs.map((s) => sendPush(vapid, s, { title: "🔔 Notificaciones activadas", body: "Así te van a llegar los avisos de RUSH POS.", tag: "test" })));
+        const sent = results.filter((r) => r.ok).length;
+        const bad = results.find((r) => !r.ok);
+        // Solo se reporta motivo si NO llegó a ningún dispositivo (un dispositivo viejo no debe tapar a uno que sí funciona)
+        return json({ sent, total: results.length,
+          reason: sent === 0 && bad ? (bad.error ? "error: " + bad.error : "el servicio de notificaciones respondió " + bad.status + (bad.detail ? " (" + bad.detail + ")" : "")) : "" });
+      }
+      // Estrella manual del admin, con motivo, ligada a la cuenta por WhatsApp (crea la tarjeta si no existía)
+      if (path === "/api/loyalty-manual-stamp" && request.method === "POST") {
+        if (!isAdmin) return json({ error: "Solo el administrador puede agregar estrellas manuales" }, 403);
+        const b = await request.json().catch(() => ({}));
+        const phone = String(b.phone || "").replace(/\D/g, "").slice(-10);
+        const reason = String(b.reason || "").trim().slice(0, 200);
+        const qty = Math.min(10, Math.max(1, Number(b.qty) || 1));
+        if (phone.length !== 10) return json({ error: "El WhatsApp debe tener 10 dígitos" }, 400);
+        if (!reason) return json({ error: "Escribe el motivo de la estrella" }, 400);
+        const existing = await db.prepare("SELECT name FROM pos_loyalty WHERE phone=?").bind(lk(phone)).first();
+        const name = String(b.name || existing?.name || "Cliente").trim() || "Cliente";
+        const me2 = await db.prepare("SELECT name FROM users WHERE id=?").bind(sess.user_id).first().catch(() => null);
+        const by = (me2 && me2.name) || sess.username || "Admin";
+        let last = null;
+        for (let i = 0; i < qty; i++) last = await addStamp(phone, name, { type: "stamp_manual", reason, by });
+        return json({ ...last, linked_existing: !!existing });
+      }
+
       // ===== Asistente de primera sesión: elegir módulos =====
       if (path === "/api/onboarding" && request.method === "POST") {
         if (!isAdmin) return json({ error: "Solo el administrador configura el negocio" }, 403);
@@ -955,10 +1011,17 @@ export default {
           const salt = newSalt();
           const hash = await hashPw(password, salt);
           const id = crypto.randomUUID();
-          await db.prepare(
-            `INSERT INTO users (id, username, name, role, password_hash, password_salt, active, created_at, updated_at, approved, tenant_id)
-             VALUES (?,?,?,?,?,?,1,datetime('now'),datetime('now'),1,?)`
-          ).bind(id, username, name, role, hash, salt, tenantId).run();
+          try {
+            await db.prepare(
+              `INSERT INTO users (id, username, name, role, password_hash, password_salt, active, created_at, updated_at, approved, tenant_id)
+               VALUES (?,?,?,?,?,?,1,datetime('now'),datetime('now'),1,?)`
+            ).bind(id, username, name, role, hash, salt, tenantId).run();
+          } catch (e) {
+            const m = String(e && e.message || e);
+            if (/UNIQUE/i.test(m)) return json({ error: "Ese usuario ya lo usa otro negocio. Prueba con otro nombre de usuario." }, 409);
+            if (/CHECK/i.test(m)) return json({ error: "La base de datos aún no acepta el rol «" + role + "». Pide al administrador de la plataforma que corra sql/v39_usuarios.sql." }, 409);
+            throw e;
+          }
           if (wa) await db.prepare("UPDATE users SET whatsapp=? WHERE id=?").bind(wa, id).run();
           return json({ id }, 201);
         }
