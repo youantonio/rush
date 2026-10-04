@@ -117,17 +117,20 @@
 </head>
 <body>
 
-<div class="top-pillars">🎾 Pádel Social Club &nbsp;·&nbsp; ☕ Café &amp; Matcha Bar &nbsp;·&nbsp; 🌮 Cocina Mexicana</div>
+<div class="top-pillars" id="pillars">🎾 Pádel Social Club &nbsp;·&nbsp; ☕ Café &amp; Matcha Bar &nbsp;·&nbsp; 🌮 Cocina Mexicana</div>
 
 <header>
   <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()" aria-label="Cambiar tema">🌙</button>
-  <div class="brand-logo-text"><span>The</span> Rush</div>
-  <div class="brand-sub">Padel Social Club · Pachuca</div>
+  <div class="brand-logo-text" id="brandName"><span>The</span> Rush</div>
+  <div class="brand-sub" id="brandSub">Padel Social Club · Pachuca</div>
   <div class="ritual-quote" id="tagline">“Tu ritual empieza aquí, entre espuma y aroma”</div>
   <div class="hours-badge" id="hours">Juega · Recarga · Conecta</div>
   <div class="delivery-links" id="deliveryLinks"></div>
 </header>
 
+<script>/* v39: en un negocio nuevo no se asoma la marca de The Rush mientras carga */
+if(/^\/t\/[a-z0-9-]+\//.test(location.pathname)){document.getElementById('brandName').textContent='';document.getElementById('pillars').style.display='none';document.getElementById('brandSub').style.display='none';document.getElementById('tagline').textContent='';document.getElementById('hours').textContent='';document.title='Carta';}
+</script>
 <div class="mode-switcher" id="modeSwitcher"></div>
 
 <div class="controls-container">
@@ -223,6 +226,15 @@ function toggleTheme(){ const d=!document.body.classList.contains('night-mode');
 // ---------- Datos ----------
 async function boot(){
   try{ settings=await (await fetch(BASE+'api/public-settings')).json(); }catch(e){ settings={}; }
+  // v39: un negocio nuevo (/t/<slug>/) ve SU nombre, no la marca de The Rush
+  if(BASE!=='/'){
+    const nm=settings.business_name||'Nuestra carta';
+    document.title=nm+' · Carta';
+    $('brandName').textContent=nm;
+    $('pillars').style.display='none'; $('brandSub').style.display='none';
+    $('tagline').textContent=''; $('hours').textContent='';
+    $('searchInput').placeholder='🔍 Buscar en la carta...';
+  }
   if(settings.menu_tagline) $('tagline').textContent='“'+settings.menu_tagline+'”';
   if(settings.business_hours) $('hours').textContent=settings.business_hours;
   $('goalTxt').textContent=settings.loyalty_goal||10;
@@ -287,7 +299,7 @@ function renderMenu(){
   if(!gs.length){ $('menuContainer').innerHTML=`<p class="empty">${q?'No encontramos nada con “'+esc(q)+'”. Prueba otra palabra.':'Aún no hay productos en esta sección.'}</p>`; return; }
   $('menuContainer').innerHTML = gs.map(g=>`
     <section class="menu-section">
-      <div class="section-header"><h2 class="section-title">${esc(g.name)}</h2><div class="section-subtitle">${g.sec.destination==='barra'?'☕ Barra The Rush':'🍳 Cocina The Rush'}</div></div>
+      <div class="section-header"><h2 class="section-title">${esc(g.name)}</h2><div class="section-subtitle">${g.sec.destination==='barra'?'☕ Barra'+(BASE==='/'?' The Rush':''):'🍳 Cocina'+(BASE==='/'?' The Rush':'')}</div></div>
       <div class="items-grid">${g.items.map(p=>{ const inCart=cart.find(x=>x.menu_item_id===String(p.id)); return `
         <article class="item-card">
           ${photo(p)}
